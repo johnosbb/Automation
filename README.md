@@ -6,7 +6,9 @@
          <img alt="Automation" src="https://github.com/johnosbb/Automation/blob/master/Automatioin.jpg"
          width=400">
       </a>
+      <h3>See the Wiki for details</h3>
 </div>
+                   
 
 
 
