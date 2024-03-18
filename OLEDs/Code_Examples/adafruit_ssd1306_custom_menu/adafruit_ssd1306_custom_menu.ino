@@ -109,6 +109,8 @@ void test()
     display.setCursor(0,0);
     display.println(F("Custom menu test"));
     display.println("");
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+    display.println(F("Custom menu test"));
     display.display();
     delay(2000);
 

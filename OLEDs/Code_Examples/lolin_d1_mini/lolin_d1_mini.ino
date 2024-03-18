@@ -5,7 +5,7 @@
 #include <U8g2lib.h>
 #include <PubSubClient.h>
 #include <WiFiClient.h>
-#include "../../../../Arduino/linksys_config.h"
+#include "../../../../Arduino/linksys_8266_config.h"
 #include <BlynkSimpleEsp8266.h>
 
 
@@ -131,7 +131,7 @@ void setup(void) {
   u8g2.begin();
   u8g2.clearBuffer();					// clear the internal memory  
   // Setup WiFi network
-  WiFi.config(device_ip, dns_ip, gateway_ip, subnet_mask);
+  WiFi.config(device_ip, dns_ip_1, gateway_ip, subnet_mask);
   WiFi.begin(ssid, pass);
 
   while (WiFi.status() != WL_CONNECTED) {
