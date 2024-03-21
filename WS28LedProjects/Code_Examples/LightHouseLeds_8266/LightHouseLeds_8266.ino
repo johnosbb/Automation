@@ -3,7 +3,7 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <WiFiClient.h>
-#include "../../../../Arduino/linksys_8266_config.h"
+#include "../../../../Arduino/bregenz2_8266_config.h"
 #include <BlynkSimpleEsp8266.h>
 /* Start of Code */
 #include "FastLED.h"
@@ -17,18 +17,39 @@
 
 CRGBArray<NUM_LEDS> leds;
 CRGB ledReference;
-
-
+CRGB availableColours[10] = { CRGB::White, CRGB::Blue, CRGB:: CornflowerBlue, CRGB:: DeepSkyBlue, CRGB::DodgerBlue, CRGB::LightBlue ,CRGB:: Cyan, CRGB::Red, CRGB::Orange, CRGB::Green };
+unsigned int selectedColour = 0;
 bool blynk_connected = 0;
 bool mqtt_connected = 0;
 
 bool lamp_on = 0;
+unsigned int on_time= 0;
 char message[255] = "MQTT Client Loading";
 WiFiClient wifiClient;
-
+BlynkTimer timer;
 
 /**** MQTT Client Initialisation Using WiFi Connection *****/
 PubSubClient mqttClient(wifiClient);
+
+
+// This function sends Arduino's uptime every second to Virtual Pin 2.
+void timer_event()
+{
+
+  on_time+=1;
+  if(on_time > 60)
+  {
+    turn_off(); 
+    on_time = 0;  
+  }
+
+  // You can send any value at any time.
+  // Please don't send more that 10 values per second.
+  Blynk.virtualWrite(V2, lamp_on);
+
+}
+
+
 
 void SendMQTTMessage(char * value)
 {
@@ -54,14 +75,14 @@ BLYNK_CONNECTED()
 
 BLYNK_WRITE(0) 
 {
-    blink(); 
+    blink_onboard(); 
     if (param.asInt()) {
         //HIGH
-        turnOn();
+        turn_on();
         SendMQTTMessage("ON");
     } else {
        //LOW
-       turnOff();
+       turn_off();
        SendMQTTMessage("OFF");
        
     }
@@ -69,27 +90,21 @@ BLYNK_WRITE(0)
 
 BLYNK_WRITE(1) 
 {
-    blink(); 
+    blink_onboard(); 
     int value = param.asInt();
     if (value) {
         //HIGH
-           ledReference = CRGB::Blue;
+          ledReference = availableColours[selectedColour++];
+          if(selectedColour > 9)
+            selectedColour = 0;
           if(VERBOSE)
             Serial.print("Enabling Blue\n");
-            turnOff();
-            turnOn();
-    } else {
-       //LOW
-          ledReference = CRGB::White;
-          if(VERBOSE)
-            Serial.print("Enabling White\n");
-          turnOff();
-          turnOn();
-       
-    }
+            turn_off();
+            turn_on();
+    } 
 }
 
-void blink()
+void blink_onboard()
 {
   digitalWrite(LED_BUILTIN, LOW);  // turn the LED on (LOW is the voltage level)
   delay(1000);                      // wait for a second
@@ -101,7 +116,7 @@ void blink()
 // function connect called to (re)connect
 // to the broker
 //--------------------------------------
-void connect() {
+void mqtt_connect() {
   while (!mqttClient.connected()) {
     Serial.print("Attempting MQTT connection...");
     String mqttClientId = "";
@@ -119,7 +134,7 @@ void connect() {
       Serial.print(mqttClient.state());
       Serial.println(" will try again in 5 seconds");
       delay(5000);
-      blink();
+      blink_onboard();
       mqtt_connected = 0;
     }
   }
@@ -131,7 +146,7 @@ void connect() {
 // if a mqtt message arrives from the broker
 //--------------------------------------
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
-  blink();
+  blink_onboard();
   Serial.print("Message arrived on topic: '");
   Serial.print(topic);
   Serial.print("' with payload: ");
@@ -142,23 +157,24 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   int result = strcmp("stat/SENSORS_BACK/GARDEN_PIR", topic);
   if(strcmp("stat/SENSORS/LAMP_OFF",topic) == 0)
   {
-    //Blynk.virtualWrite(V0, 1);
-    lamp_on = 0;
-    turnOff();
+
+    turn_off();
+    Blynk.virtualWrite(V2, lamp_on);
   }
   else if(strcmp("stat/SENSORS/LAMP_ON",topic) == 0)
   {
-    //Blynk.virtualWrite(V0, 1);
-    lamp_on = 1;
+
+
     ledReference = CRGB::White;
-    turnOn();
+    turn_on();
+    Blynk.virtualWrite(V2, lamp_on);
   }
   else if(strcmp("stat/SENSORS/LAMP_COLOR",topic) == 0)
   {
-    //Blynk.virtualWrite(V0, 1);
     ledReference = CRGB::Blue;
-    turnOff();
-    turnOn();
+    turn_off();
+    turn_on();
+    Blynk.virtualWrite(V2, lamp_on);
   }
 
 }
@@ -172,6 +188,7 @@ void setup(void) {
   Serial.begin(9600);
   pinMode(LED_PIN, OUTPUT);
   FastLED.addLeds<NEOPIXEL,LED_PIN>(leds, NUM_LEDS);
+  turn_off();
   Serial.print("WIFI status = ");
   Serial.println(WiFi.getMode());
   WiFi.disconnect(true);
@@ -202,10 +219,12 @@ void setup(void) {
   }
   Serial.println(message);
   ledReference = CRGB::White;
-  turnOff();
+  turn_off();
+  // Setup a function to be called every 60 seconds
+  timer.setInterval(600000L, timer_event);
 }
 
-void turnOn()
+void turn_on()
 {
   int i = 0;
   CRGB * glassLeds;
@@ -219,9 +238,10 @@ void turnOn()
     glassLeds[i].b = ledReference.b;
     FastLED.show();
   }
+  lamp_on = 1;
 }
 
-void turnOff()
+void turn_off()
 {
   int i = 0;
   CRGB * glassLeds;
@@ -233,13 +253,14 @@ void turnOff()
     glassLeds[i] = CRGB::Black;
     FastLED.show();
   }
+  lamp_on = 0;
 }
 
 
 void loop(void) {
 
   if (!mqttClient.connected()) {
-    connect();
+    mqtt_connect();
   }
   mqttClient.loop();
   Blynk.run();
