@@ -36,12 +36,40 @@
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include "../../../../Arduino/config.h"
+#include "../../../../Arduino/linksys_config_92.h"
 #include <WebServer.h>
 #include <ESPmDNS.h>
-#include <BlynkSimpleEsp32.h>
 
+
+
+
+
+//#define ENABLE_WS_2828_8
+
+
+#ifdef ENABLE_WS_2828_8
+#include "FastLED.h"
+// LED Related -----------------------------------------------------------------
+// Define the Pins
+#define LED_PIN 2
+// How many leds are connected?
+#define NUM_LEDS 8
+CRGBArray<NUM_LEDS> leds;
+CRGB ledReference;
+CRGB availableColours[10] = { CRGB::White, CRGB::Blue, CRGB:: CornflowerBlue, CRGB:: DeepSkyBlue, CRGB::DodgerBlue, CRGB::LightBlue ,CRGB:: Cyan, CRGB::Red, CRGB::Orange, CRGB::Green };
+unsigned int selectedColour = 0;
+bool lamp_on = 0;
+unsigned int on_time= 0;
+// LED Related -----------------------------------------------------------------
+#endif
+
+#define VERBOSE 1
 #define STATIC_IP_ADDRESS
+//#define ENABLE_BLYNK
+
+#ifdef ENABLE_BLYNK
+#include <BlynkSimpleEsp32.h>
+#endif
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
@@ -55,7 +83,9 @@
 #define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+#ifdef ENABLE_BLYNK
 BlynkTimer timer;
+#endif
 
 WiFiClient wifiClient;
 bool small_font = 0;
@@ -66,7 +96,7 @@ bool mqtt_connected = 0;
 bool blynk_connected = 0;
 char baseMacChr[18] = {0};
 
-void Blink()
+void blink_board_led()
 {
   digitalWrite(LED_BUILTIN, LOW);  // turn the LED on (LOW is the voltage level)
   delay(1000);                      // wait for a second
@@ -168,7 +198,7 @@ void HomePage() {
 
 void HandleRoot() {
   HomePage();
-  Blink();
+  blink_board_led();
   Serial.println("Webserver Accessed");
 }
 
@@ -214,7 +244,7 @@ void HandleNotFound() {
   server.send(404, "text/plain", message);
 }
 
-
+#ifdef ENABLE_WS_2828_8
 void InitDisplay()
 {
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
@@ -234,6 +264,7 @@ void InitDisplay()
   // Draw a single pixel in white
   display.drawPixel(10, 10, SSD1306_WHITE);
 }
+#endif
 
 void DisplayMessage(char * message,int size)
 {
@@ -342,11 +373,44 @@ void MQTTCallback(char* topic, byte* payload, unsigned int length) {
     small_font = 0;
 
   }
-  else if(strcmp("stat/SENSORS/TEST",topic) == 0)
+  else if(strcmp("stat/ESP32LAMP/ON",topic) == 0)
   {
     //Blynk.virtualWrite(V0, 1);
-    DisplayMessage("Hello|World!",2);
+    DisplayMessage("Turning|On",2);
     small_font = 0;
+    #ifdef ENABLE_WS_2828_8
+    ledReference = CRGB::White;
+    turn_on();
+    #endif
+  }
+  else if(strcmp("stat/ESP32LAMP/BLUE",topic) == 0)
+  {
+    //Blynk.virtualWrite(V0, 1);
+    DisplayMessage("Turning|On",2);
+    small_font = 0;
+    #ifdef ENABLE_WS_2828_8
+    ledReference = CRGB::Blue;
+    turn_on();
+    #endif
+  }
+  else if(strcmp("stat/ESP32LAMP/OFF",topic) == 0)
+  {
+    //Blynk.virtualWrite(V0, 1);
+    DisplayMessage("Turning|Off",2);
+    small_font = 0;
+    #ifdef ENABLE_WS_2828_8
+    ledReference = CRGB::White;
+    turn_off();
+    #endif
+  }
+  else if(strcmp("stat/ESP32LAMP/BRIGHTEN",topic) == 0)
+  {
+    //Blynk.virtualWrite(V0, 1);
+    DisplayMessage("Brighten",2);
+    small_font = 0;
+    #ifdef ENABLE_WS_2828_8
+    brighten(10);
+    #endif
   }
   else 
   {
@@ -356,6 +420,7 @@ void MQTTCallback(char* topic, byte* payload, unsigned int length) {
 
 }
 
+#ifdef ENABLE_BLYNK
 // This function sends Arduino's uptime every second to Virtual Pin 2.
 void BlynkTimerEvent()
 {
@@ -364,17 +429,84 @@ void BlynkTimerEvent()
   Blynk.virtualWrite(V2, millis() / 1000);
 
 }
-
+#endif
 
 // Function to convert IP address to char* array
 void ipToString(IPAddress ip, char* output) {
   sprintf(output, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
 }
 
-void setup(void) {
-  char  ip[16];
-  pinMode(LED_BUILTIN, OUTPUT);      // set the LED pin mode
-  Serial.begin(115200);
+
+#ifdef ENABLE_WS_2828_8
+void brighten(int delay)
+{
+  for(int led = 0; led < NUM_LEDS; led++)
+  { 
+    leds[led] *= 2;
+    FastLED.show();
+  }
+  FastLED.delay(delay);
+  
+}
+
+
+void turn_on()
+{
+  int i = 0;
+  CRGB * glassLeds;
+  int brightness = 10;
+  glassLeds = leds;
+  if(VERBOSE)
+    Serial.print("Turning On Leds\n");
+  //FastLED.setBrightness(brightness); 
+  for(i =0;i < NUM_LEDS;i++)
+  {
+    glassLeds[i].r = ledReference.r;
+    glassLeds[i].g = ledReference.g;
+    glassLeds[i].b = ledReference.b;
+    FastLED.show();
+  }
+  // for  (int i = 0; i < 40;i++)
+  //   brighten(10);
+  // delay(100);
+  lamp_on = 1;
+
+}
+
+
+
+
+void turn_off()
+{
+  int i = 0;
+  CRGB * glassLeds;
+  if(VERBOSE)
+    Serial.print("Turning Off Leds\n"); 
+  glassLeds = leds;
+  for(i =0;i < NUM_LEDS;i++)
+  {
+    glassLeds[i] = CRGB::Black;
+    FastLED.show();
+  }
+  lamp_on = 0;
+}
+
+
+void led_setup()
+{
+    // LED Related -----------------------------------------------------------------
+  pinMode(LED_PIN, OUTPUT);
+  FastLED.addLeds<NEOPIXEL,LED_PIN>(leds, NUM_LEDS);
+  ledReference = CRGB::White;
+  turn_off();
+  // LED Related -----------------------------------------------------------------
+}
+
+#endif
+
+
+void setup_wifi()
+{
   WiFi.setMinSecurity(WIFI_AUTH_WEP); // Lower min security to WEP.
   Serial.print("WIFI status = ");
   Serial.println(WiFi.getMode());
@@ -384,6 +516,16 @@ void setup(void) {
   delay(1000);
   Serial.print("WIFI status = ");
   Serial.println(WiFi.getMode());
+}
+
+void setup(void) {
+  char  ip[16];
+  #ifdef ENABLE_WS_2828_8
+  led_setup();
+  #endif
+  pinMode(LED_BUILTIN, OUTPUT);      // set the LED pin mode for the onboard led
+  Serial.begin(115200);
+  setup_wifi();
 #ifdef STATIC_IP_ADDRESS  
   // Setup WiFi network
   WiFi.config(device_ip,  gateway_ip, subnet_mask,dns_ip_1,dns_ip_2);
@@ -399,7 +541,9 @@ void setup(void) {
 #endif
   GetMacAddress();
   Serial.println("");
+#ifdef ENABLE_WS_2828_8
   InitDisplay();
+#endif  
   DisplayMessage("Wifi Connecting...",1);
   // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {
@@ -422,17 +566,19 @@ void setup(void) {
   mqttClient.setServer(mqtt_server, mqtt_server_port);
   mqttClient.setCallback(MQTTCallback);
   Serial.println("MQTT Client Started .... ");
+  #ifdef ENABLE_BLYNK
   Serial.print("Starting Blynk .");
   // Setup Blynk
   Blynk.config(BLYNK_AUTH_TOKEN);
   while (Blynk.connect() == false) {
     Serial.print(". ");
   }
+ 
   blynk_connected=1;
   Serial.println("Setting Blynk Timer.... ");
   // Setup a function to be called every second
   timer.setInterval(10000L, BlynkTimerEvent);
-
+ #endif
   
   server.on("/", HandleRoot);
   server.on("/test.svg", DrawGraph);
@@ -455,8 +601,11 @@ void loop(void) {
   server.handleClient();
   delay(2);//allow the cpu to switch to other tasks
   mqttClient.loop();
+#ifdef ENABLE_BLYNK
   timer.run();
+
   Blynk.run();
+#endif
 }
 
 void DrawGraph() {

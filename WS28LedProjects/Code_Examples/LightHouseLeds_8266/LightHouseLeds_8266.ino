@@ -10,20 +10,24 @@
 #include <ArduinoJson.h>
 #define VERBOSE 1
 
+
+// LED Related -----------------------------------------------------------------
 // Define the Pins
 #define LED_PIN 2
 // How many leds are connected?
 #define NUM_LEDS 9
-
 CRGBArray<NUM_LEDS> leds;
 CRGB ledReference;
 CRGB availableColours[10] = { CRGB::White, CRGB::Blue, CRGB:: CornflowerBlue, CRGB:: DeepSkyBlue, CRGB::DodgerBlue, CRGB::LightBlue ,CRGB:: Cyan, CRGB::Red, CRGB::Orange, CRGB::Green };
 unsigned int selectedColour = 0;
+bool lamp_on = 0;
+unsigned int on_time= 0;
+// LED Related -----------------------------------------------------------------
+
 bool blynk_connected = 0;
 bool mqtt_connected = 0;
 
-bool lamp_on = 0;
-unsigned int on_time= 0;
+
 char message[255] = "MQTT Client Loading";
 WiFiClient wifiClient;
 BlynkTimer timer;
@@ -180,15 +184,21 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 }
 
 
+void led_setup()
+{
+    // LED Related -----------------------------------------------------------------
+  pinMode(LED_PIN, OUTPUT);
+  FastLED.addLeds<NEOPIXEL,LED_PIN>(leds, NUM_LEDS);
+  turn_off();
+  // LED Related -----------------------------------------------------------------
+}
 
 void setup(void) {
 
   pinMode(LED_BUILTIN, OUTPUT);
   // Debug console
   Serial.begin(9600);
-  pinMode(LED_PIN, OUTPUT);
-  FastLED.addLeds<NEOPIXEL,LED_PIN>(leds, NUM_LEDS);
-  turn_off();
+  led_setup();
   Serial.print("WIFI status = ");
   Serial.println(WiFi.getMode());
   WiFi.disconnect(true);
