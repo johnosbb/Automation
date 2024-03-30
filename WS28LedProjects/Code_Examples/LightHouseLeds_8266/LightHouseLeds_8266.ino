@@ -3,7 +3,7 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <WiFiClient.h>
-#include "../../../../Arduino/bregenz2_8266_config.h"
+#include "config.h"
 #include <BlynkSimpleEsp8266.h>
 /* Start of Code */
 #include "FastLED.h"
