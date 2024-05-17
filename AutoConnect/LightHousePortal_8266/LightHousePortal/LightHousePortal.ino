@@ -23,7 +23,7 @@ using WebServer = ESP8266WebServer;
 #include <WebServer.h>
 #endif
 #include <AutoConnectCore.h>
-
+#include "PageBuilder.h"
 
 // This is for 8266
 #ifndef BUILTIN_LED
@@ -122,7 +122,8 @@ void handleRoot() {
   "<div class=\"header\">Lighting</div>"
   "<div class=\"main-section\">"
     "<div class=\"row\">"
-    "<a class=\"button\" href=\"/io?main=low\">On</a>"
+    "<a class=\"button\" href=\"/io?main=low\">"
+    "On</a>"
     "<div class=\"label\">Main Lamp</div>"
     "</div>"
     "<div class=\"row\">"
