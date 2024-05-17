@@ -557,7 +557,7 @@ void WifiSetup() {
         }
 
         WiFi.setHostname(mdnsName);
-
+        WiFi.setMinSecurity(WIFI_AUTH_WEP); // Lower min security to WEP for legacy wifi
         // Initiate network connection request (3rd argument, channel = 0 is 'auto')
         WiFi.begin(bestSSID, stationList[bestStation].password, 0, bestBSSID);
 

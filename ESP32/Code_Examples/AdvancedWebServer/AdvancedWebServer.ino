@@ -33,7 +33,7 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
-
+#include <TimerOne.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "config.h"
@@ -409,7 +409,7 @@ void MQTTCallback(char* topic, byte* payload, unsigned int length) {
     DisplayMessage("Brighten",2);
     small_font = 0;
     #ifdef ENABLE_WS_2828_8
-    brighten(10);
+    //brighten(10);
     #endif
   }
   else 
@@ -438,23 +438,14 @@ void ipToString(IPAddress ip, char* output) {
 
 
 #ifdef ENABLE_WS_2828_8
-void brighten(int delay)
-{
-  for(int led = 0; led < NUM_LEDS; led++)
-  { 
-    leds[led] *= 2;
-    FastLED.show();
-  }
-  FastLED.delay(delay);
-  
-}
+
 
 
 void turn_on()
 {
   int i = 0;
   CRGB * glassLeds;
-  int brightness = 10;
+
   glassLeds = leds;
   if(VERBOSE)
     Serial.print("Turning On Leds\n");
@@ -466,9 +457,7 @@ void turn_on()
     glassLeds[i].b = ledReference.b;
     FastLED.show();
   }
-  // for  (int i = 0; i < 40;i++)
-  //   brighten(10);
-  // delay(100);
+
   lamp_on = 1;
 
 }
@@ -508,14 +497,14 @@ void led_setup()
 void setup_wifi()
 {
   WiFi.setMinSecurity(WIFI_AUTH_WEP); // Lower min security to WEP.
-  Serial.print("WIFI status = ");
-  Serial.println(WiFi.getMode());
+  // Serial.print("WIFI status = ");
+  // Serial.println(WiFi.getMode());
   WiFi.disconnect(true);
   delay(1000);
   WiFi.mode(WIFI_STA);
   delay(1000);
-  Serial.print("WIFI status = ");
-  Serial.println(WiFi.getMode());
+  // Serial.print("WIFI status = ");
+  // Serial.println(WiFi.getMode());
 }
 
 void setup(void) {
@@ -544,6 +533,7 @@ void setup(void) {
 #ifdef ENABLE_WS_2828_8
   InitDisplay();
 #endif  
+
   DisplayMessage("Wifi Connecting...",1);
   // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {

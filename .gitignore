@@ -161,6 +161,13 @@ cython_debug/
 
 libraries/
 tools/
-ESP32/Code_Examples/esp32-cam-webserver/myconfig.h
-WS28LedProjects/Code_Examples/LightHouseLeds_8266/config.h
-ESP32/Code_Examples/AdvancedWebServer/config.h
+# ESP32/Code_Examples/esp32-cam-webserver/myconfig.h
+# WS28LedProjects/Code_Examples/LightHouseLeds_8266/config.h
+# WS28LedProjects/Code_Examples/LightHouseLeds_8266/config_linksys.h
+# ESP32/Code_Examples/AdvancedWebServer/config.h
+ESP32/**/Code_Examples/**/config.h
+ESP32/**/Code_Examples/**/config_linksys.h
+WS28LedProjects/**/Code_Examples/**/config.h
+WS28LedProjects/**/Code_Examples/**/config_linksys.h
+OLEDs/**/Code_Examples/**/config.h
+OLEDs/**/Code_Examples/**/config_linksys.h
