@@ -1,0 +1,14 @@
+
+# Pins to use on Node MCU
+
+## First Priority
+
+- The most suitable pins for digital I/O are D1 (GPIO5) and D2 (GPIO4).
+
+## Second Priority
+ 
+- D5 (GPIO14), D4 (GPIO12), and D7 (GPIO13) pins can be used as digital I/O. The reason is that these pins are for SPI communications, and if we use them as digital I/O, we won’t need to to use the NodeMCU Board’s SPI Protocol (which is used for setup and communication by many devices, including some monitors). The SPI limitation won’t be an issue if the circuit doesn’t have such a component, of course.
+
+## Third Priority
+
+- D3 (GPIO0) and D4 (GPIO2) can also function as digital outputs. Remember that the boot process uses these two pins. In other words, the board won’t boot if these pins are pulled HIGH or LOW by external components such as a relay, optocoupler, transistor, or any driver model. Setting these pins to LOW will result in the circuit being unable to boot. These two pins are pulled UP internally. And D3 (GPIO0) is connected to the board’s FLASH Button.
