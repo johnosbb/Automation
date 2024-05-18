@@ -19,9 +19,18 @@
 #include <WebServer.h>
 #endif
 #include "config.h"
-#include <PageBuilder.h>
+
 #include "WebLED.h"   // Only the LED lighting icon
 
+
+#include <AutoConnectCore.h>
+#include <PageBuilder.h>
+
+AutoConnect portal;
+
+
+char * ssid  = ssid1;
+char * pass = pass1;
 // Web page structure is described as follows.
 // It contains two tokens as {{STYLE}} and {{LEDIO}} also 'led'
 //  parameter for GET method.
@@ -36,7 +45,7 @@ static const char _PAGE_LED[] PROGMEM = R"(
   </style>
 </head>
 <body>
-  <p>{{ARCH}} LED Control</p>
+  <p>{{ARCH}} LED Control V1.0.0</p>
   <div class="one">
   <p><a class="button" href="/?led=on">ON</a></p>
   <p><a class="button" href="/?led=off">OFF</a></p>
@@ -135,23 +144,34 @@ ESP8266WebServer  Server;
 WebServer  Server;
 #endif
 
-// const char* SSID = "********";  // Modify for your available WiFi AP
-// const char* PSK  = "********";  // Modify for your available WiFi AP
 
-const char* username = "admin";
-const char* password = "espadmin";
+bool atDetect(IPAddress& softapIP) {
+  Serial.println("Captive portal started, SoftAP IP:" + softapIP.toString());
+  return true;
+}
 
-#define BAUDRATE 9600
 
-void setup() {
-  delay(1000);  // for stable the module.
-  Serial.begin(BAUDRATE);
+bool setupAutoConnect()
+{
+  // Starts user web site included the AutoConnect portal.
+  portal.onDetect(atDetect);
+  if (portal.begin()) {
+    WebServer& server = portal.host();
+    Serial.println("Started, IP:" + WiFi.localIP().toString() + " SSID:" + WiFi.SSID());
+    return true;
+  }
+  else {
+    Serial.println("Connection failed.");
+    while (true) { yield(); }
+  }
+  return false;
+  
+}
 
-  pinMode(ONBOARD_LED, OUTPUT);
-  digitalWrite(ONBOARD_LED, HIGH);
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);
 
+bool setupWifi()
+{
+  unsigned int numberOfAttempts = 0;
   WiFi.disconnect();
 #ifdef STATIC_IP_ADDRESS
   // Setup WiFi network
@@ -167,16 +187,62 @@ void setup() {
 
   do {
     delay(500);
-  } while (WiFi.waitForConnectResult() != WL_CONNECTED);
+    numberOfAttempts++;
+  } while ((WiFi.waitForConnectResult() != WL_CONNECTED) && (numberOfAttempts < 10));
+  if(numberOfAttempts  == 10)
+  {
+    Serial.println("Failed to connect to " + String(ssid) + " after " + numberOfAttempts + " attempts.");
+    return false;
+  }
   Serial.println("Connected to " + String(ssid));
+  return true;
+}
 
-  LEDPage.authentication(username, password, DIGEST_AUTH, "WebLED");
+#define BAUDRATE 9600
+
+void startServer()
+{
+    //LEDPage.authentication(username, password, DIGEST_AUTH, "WebLED");
+    LEDPage.transferEncoding(PageBuilder::TransferEncoding_t::ByteStream);
+    LEDPage.insert(Server);
+    Server.begin();
+
+    Serial.print("Web server http://");
+    Serial.println(WiFi.localIP());
+}
+
+
+
+void setup() {
+  delay(1000);  // for stable the module.
+  Serial.begin(BAUDRATE);
+
+  pinMode(ONBOARD_LED, OUTPUT);
+  digitalWrite(ONBOARD_LED, HIGH);
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+
+  // if(setupWifi())
+  // {
+  //    startServer();
+  // }
+  // else
+  // {
+  //   Serial.println("Failed to connect.");
+  //   ssid = ssid2;
+  //   pass = pass2;
+  //   if(setupWifi())
+  //   {
+  //       startServer();
+  //   }
+  //    
+  // }
+  Serial.println("Using AutoConnect Methods.");
+  setupAutoConnect();
   LEDPage.transferEncoding(PageBuilder::TransferEncoding_t::ByteStream);
-  LEDPage.insert(Server);
-  Server.begin();
+  LEDPage.insert(portal.host());
 
-  Serial.print("Web server http://");
-  Serial.println(WiFi.localIP());
+
 }
 
 void loop() {
@@ -184,6 +250,6 @@ void loop() {
     digitalWrite(ONBOARD_LED, LOW);
   else
     digitalWrite(ONBOARD_LED, HIGH);
-
-  Server.handleClient();
+  portal.handleClient();
+  //Server.handleClient();
 }
