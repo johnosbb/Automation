@@ -167,6 +167,8 @@ tools/
 # ESP32/Code_Examples/AdvancedWebServer/config.h
 ESP32/**/Code_Examples/**/config.h
 ESP32/**/Code_Examples/**/config_linksys.h
+StepperMotors/**/Code_Examples/**/config.h
+StepperMotors/**/Code_Examples/**/config_linksys.h
 NodeMCU_8266/**/Code_Examples/**/config.h
 NodeMCU_8266/**/Code_Examples/**/config_linksys.h
 WS28LedProjects/**/Code_Examples/**/config.h
