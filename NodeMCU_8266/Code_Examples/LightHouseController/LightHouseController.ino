@@ -47,7 +47,11 @@ const int stepsPerRevolution = 2048;
 
 #ifdef ACCELSTEPPER
 AccelStepper stepper1(AccelStepper::HALF4WIRE, IN1, IN3, IN2, IN4);
-
+// Variables to store the motor control state
+enum MotorState { IDLE, MOVE_TO_0, MOVE_TO_STEPS, MOVE_TO_NEG_STEPS, MOVE_TO_FINAL };
+MotorState motorState = IDLE;
+long targetSpeed = 20;
+long targetSteps = 200;
 #endif
 
 
@@ -55,14 +59,18 @@ AccelStepper stepper1(AccelStepper::HALF4WIRE, IN1, IN3, IN2, IN4);
 // LED Related -----------------------------------------------------------------
 // WS2812
 // Define the Pins
-#define WS2818_MAIN D0 // red
-#define FIRST_FLOOR_LAMP D3 // yellow
-#define SECOND_FLOOR_LAMP D4 // green
+#define WS2818_MAIN D0 // yellow
+#define WS2812_FIRST_FLOOR_LAMP D4 // blue
+#define WS2812_SECOND_FLOOR_LAMP D7 // green
 #define THIRD_FLOOR_LAMP D5 // blue
-// How many leds are connected?
-#define NUM_LEDS 8
-CRGBArray<NUM_LEDS> leds;
-CRGB ledReference;
+// How many main_leds are connected?
+#define NUM_LEDS_MAIN_LAMP 8
+#define NUM_LEDS_FIRST_FLOOR_LAMP 1
+#define NUM_LEDS_SECOND_FLOOR_LAMP 1
+CRGBArray<NUM_LEDS_MAIN_LAMP> main_leds;
+CRGBArray<NUM_LEDS_FIRST_FLOOR_LAMP> first_floor_led;
+CRGBArray<NUM_LEDS_SECOND_FLOOR_LAMP> second_floor_led;
+CRGB ledColourReference;
 CRGB availableColours[10] = { CRGB::White, CRGB::Blue, CRGB:: CornflowerBlue, CRGB:: DeepSkyBlue, CRGB::DodgerBlue, CRGB::LightBlue ,CRGB:: Cyan, CRGB::Red, CRGB::Orange, CRGB::Green };
 unsigned int selectedColour = 0;
 bool first_lamp_on = false;
@@ -146,6 +154,7 @@ static const char _PAGE_MOTOR[] PROGMEM = R"(
   }
 
   function moveMotor(direction) {
+    setMotorParameters();
     window.location.href = `/motor?direction=${direction}&speed=${speed}&steps=${steps}`;
   }
 </script>
@@ -154,19 +163,25 @@ static const char _PAGE_MOTOR[] PROGMEM = R"(
   <div class="header common-section">Motor Control</div>
   <div class="main-section">
     <div class="control-section">
-      <label class="control-section-label" for="speed">Speed (0-1000):</label>
-      <input class="control-section-input" type="number" id="speed" name="speed" min="0" max="1000" value="20">
-      <label class="control-section-label" for="steps">Steps (0-2048):</label>
-      <input class="control-section-input" type="number" id="steps" name="steps" min="0" max="2048" value="200">
-      <button class="control-section-button" onclick='setMotorParameters()'>Set Parameters</button>
+      <div class="control-pair">
+        <label class="control-section-label" for="speed">Speed (0-1000):</label>
+        <input class="control-section-input" type="number" id="speed" name="speed" min="0" max="1000" value="20">
+      </div>
+      <div class="control-pair">
+        <label class="control-section-label" for="steps">Steps (0-2048):</label>
+        <input class="control-section-input" type="number" id="steps" name="steps" min="0" max="2048" value="100">
+      </div>
     </div>
     <div class="mrow">
       <a class="button motor-button button-green" href="#" onclick='moveMotor("ccw")'>Move Motor Counter Clockwise</a>
       <a class="button motor-button button-green" href="#" onclick='moveMotor("center")'>Center Motor</a>
       <a class="button motor-button button-green" href="#" onclick='moveMotor("cw")'>Move Motor Clockwise</a>
     </div>
+    <div class="mrow">
+      <a class="button motor-button button-green sweep-button" href="#" onclick='moveMotor("sweep")'>Sweep</a>
+    </div>
   </div>
-  <div class="footer common-section">ESP8266 Light House Control V1.0.1: {{MOTOR_LABEL_STATUS}}</div>
+  <div class="footer common-section">ESP8266 Light House Control V1.0.2: {{MOTOR_LABEL_STATUS}}</div>
 </div>
 </body>
 </html>
@@ -293,22 +308,23 @@ p {
   padding: 5px;
   text-align: center;
   border-radius: 10px;
-  font-size: 1em; /* Adjust font size to be proportional to the header */
-  margin-top: 2px; /* Increased margin to create a gap between button and label */
+  font-size: 1em; 
+  margin-top: 2px; 
 }
 .control-section {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  gap: 20px; 
+}
+.control-pair {
+  display: flex;
   align-items: center;
-  margin-bottom: 20px;
 }
-.control-section label {
-  margin: 5px 0;
+.control-section-input {
+  margin-right: 10px; 
 }
-.control-section input {
-  margin: 5px 0;
-  padding: 5px;
-  width: 150px;
+.control-section-label {
+  white-space: nowrap;
 }
 .control-section button {
   margin: 10px 0;
@@ -422,40 +438,46 @@ String ArgsMainLamp(PageArgument& args) {
 
 
 
-String processMotorArgs(PageArgument& args)
-{
+// Function to process motor arguments
+String processMotorArgs(PageArgument& args) {
     String value = "";
-    long int speed = 20; // default speed
-    long int steps = 200; // default steps
     if (args.hasArg("speed")) {
-      speed = args.arg("speed").toInt();
-      if (speed < 0) speed = 0;
-      if (speed > 1000) speed = 1000;
+        targetSpeed = args.arg("speed").toInt();
+        if (targetSpeed < 0) targetSpeed = 0;
+        if (targetSpeed > 1000) targetSpeed = 1000;
+        value = "Moved at speed " + String(targetSpeed);
     }
     if (args.hasArg("steps")) {
-      steps = args.arg("steps").toInt();
-      if (steps < 0) steps = 0;
-      if (steps > 2048) steps = 2048;
+        targetSteps = args.arg("steps").toInt();
+        if (targetSteps < 0) targetSteps = 0;
+        if (targetSteps > 2048) targetSteps = 2048;
+        value += " for " + String(targetSteps) + " steps in the";
     }
     if (args.hasArg("direction")) {
-      String direction = args.arg("direction");
-      if (direction == "ccw") {
-        stepper1.setSpeed(speed);
-        stepper1.moveTo(-steps);
-      } else if (direction == "cw") {
-        stepper1.setSpeed(speed);
-        stepper1.moveTo(steps);
-      } else if (direction == "center") {
-        stepper1.setSpeed(speed);
-        stepper1.moveTo(0);
-      } else {
-        Serial.println("Received an unknown direction");
-        flashLed();
-      }
+        String direction = args.arg("direction");
+        stepper1.setSpeed(targetSpeed); // Set speed for all directions
+        stepper1.enableOutputs(); // Enable motor outputs
+
+        if (direction == "ccw") {
+            stepper1.moveTo(-targetSteps);
+            motorState = IDLE;
+        } else if (direction == "cw") {
+            stepper1.moveTo(targetSteps);
+            motorState = IDLE;
+        } else if (direction == "center") {
+            stepper1.moveTo(0);
+            motorState = IDLE;
+        } else if (direction == "sweep") {
+            targetSteps = 500;
+            targetSpeed = 10;
+            stepper1.moveTo(0);
+            motorState = MOVE_TO_0;
+        } else {
+            Serial.println("Received an unknown direction");
+            flashLed();
+        }
+        value += " direction " + String(direction);
     }
-
-
-
     delay(1);
     return value;
 }
@@ -492,11 +514,13 @@ void processLampArgs(PageArgument& args)
   if (args.hasArg("led_main")) {
     if (args.arg("led_main") == "On")
     {
-        turn_on();
+        turn_on(main_leds,NUM_LEDS_MAIN_LAMP);
+        main_lamp_on = true;
     }
     else if (args.arg("led_main") == "Off")
     {
-      turn_off();
+      turn_off(main_leds,NUM_LEDS_MAIN_LAMP);
+      main_lamp_on = false;
     }
     else
     {
@@ -507,12 +531,18 @@ void processLampArgs(PageArgument& args)
   if (args.hasArg("led_first")) {
     if (args.arg("led_first") == "On")
     {
-      digitalWrite(FIRST_FLOOR_LAMP, HIGH);
+      #ifdef VERBOSE
+      Serial.println("Setting first floor lamp on");
+      #endif
+      turn_on(first_floor_led, NUM_LEDS_FIRST_FLOOR_LAMP);
       first_lamp_on = true;
     }
     else if (args.arg("led_first") == "Off")
     {
-      digitalWrite(FIRST_FLOOR_LAMP, LOW);
+      #ifdef VERBOSE
+      Serial.println("Setting first floor lamp off");
+      #endif
+      turn_off(first_floor_led, NUM_LEDS_FIRST_FLOOR_LAMP);
       first_lamp_on = false;
     }
     else
@@ -524,7 +554,10 @@ void processLampArgs(PageArgument& args)
   if (args.hasArg("led_second")) {
     if (args.arg("led_second") == "On")
     {
-      digitalWrite(SECOND_FLOOR_LAMP, HIGH);
+      #ifdef VERBOSE
+      Serial.println("Setting second floor lamp on");
+      #endif
+      turn_on(second_floor_led, NUM_LEDS_SECOND_FLOOR_LAMP);
       second_lamp_on = true;
     }
     else if (args.arg("led_second") == "Off")
@@ -532,7 +565,7 @@ void processLampArgs(PageArgument& args)
       #ifdef VERBOSE
       Serial.println("Setting second floor lamp off");
       #endif
-      digitalWrite(SECOND_FLOOR_LAMP, LOW);
+      turn_off(second_floor_led, NUM_LEDS_SECOND_FLOOR_LAMP);
       second_lamp_on = false;
     }
     else
@@ -788,63 +821,59 @@ bool setupAutoConnect()
 }
 
 #ifdef VERBOSE
-void show_led_states()
+void show_led_states(CRGB* device, int number_of_leds)
 {
   int i = 0;
-  CRGB * glassLeds;
-  glassLeds = leds;
   #ifdef VERBOSE
     Serial.print("Showing led states\n"); 
   #endif
-  for(int i = 0; i < NUM_LEDS; i++) {
+  for(int i = 0; i < number_of_leds; i++) {
     Serial.print(i + 1); // Print LED index (1-based)
     Serial.print(": r=");
-    Serial.print(glassLeds[i].r);
+    Serial.print(device[i].r);
     Serial.print(", g=");
-    Serial.print(glassLeds[i].g);
+    Serial.print(device[i].g);
     Serial.print(", b=");
-    Serial.println(glassLeds[i].b);
+    Serial.println(device[i].b);
   
   }
 }
 #endif
 
 
-void turn_on()
-{
-  int i = 0;
-  CRGB * glassLeds;
-  glassLeds = leds;
-  #ifdef VERBOSE
-    Serial.print("Turning On Leds\n");
-  #endif 
-  for(i =0;i < NUM_LEDS;i++)
-  {
-    glassLeds[i].r = ledReference.r;
-    glassLeds[i].g = ledReference.g;
-    glassLeds[i].b = ledReference.b;
-    FastLED.show();
-  }
-  main_lamp_on = true;
 
-  //show_led_states();
+void turn_on(CRGB* device, int number_of_leds)
+{
+    int i = 0;
+    #ifdef VERBOSE
+        Serial.print("Turning On Leds\n");
+    #endif 
+    for(i = 0; i < number_of_leds; i++)
+    {
+        device[i].r = ledColourReference.r;
+        device[i].g = ledColourReference.g;
+        device[i].b = ledColourReference.b;
+        FastLED.show();
+    }
+    
+
+    //show_led_states(main_leds,NUM_LEDS_MAIN_LAMP);
 }
 
-void turn_off()
+
+void turn_off(CRGB * device,int number_of_leds)
 {
   int i = 0;
-  CRGB * glassLeds;
   #ifdef VERBOSE
     Serial.print("Turning Off Leds\n");
   #endif 
-  glassLeds = leds;
-  for(i =0;i < NUM_LEDS;i++)
+  for(i =0;i < number_of_leds;i++)
   {
-    glassLeds[i] = CRGB::Black;
+    device[i] = CRGB::Black;
     FastLED.show();
-    //show_led_states();
+    //show_led_states(main_leds,NUM_LEDS_MAIN_LAMP);
   }
-  main_lamp_on = false;
+  
 }
 
 
@@ -852,12 +881,13 @@ void led_setup()
 {
   // LED Related -----------------------------------------------------------------
   pinMode(WS2818_MAIN, OUTPUT);
-  pinMode(FIRST_FLOOR_LAMP, OUTPUT);
-  pinMode(SECOND_FLOOR_LAMP, OUTPUT);
-  FastLED.addLeds<WS2812,WS2818_MAIN>(leds, NUM_LEDS); //NEOPIXEL
-  turn_off();
-  //turn_on();
-  // LED Related -----------------------------------------------------------------
+  pinMode(WS2812_FIRST_FLOOR_LAMP, OUTPUT);
+  pinMode(WS2812_SECOND_FLOOR_LAMP, OUTPUT);
+  FastLED.addLeds<WS2812,WS2818_MAIN>(main_leds, NUM_LEDS_MAIN_LAMP); //NEOPIXEL
+  FastLED.addLeds<WS2812,WS2812_FIRST_FLOOR_LAMP>(first_floor_led, NUM_LEDS_FIRST_FLOOR_LAMP); //NEOPIXEL
+  FastLED.addLeds<WS2812,WS2812_SECOND_FLOOR_LAMP>(second_floor_led, NUM_LEDS_SECOND_FLOOR_LAMP); //NEOPIXEL
+  turn_off(main_leds,NUM_LEDS_MAIN_LAMP);
+
 }
 
 
@@ -910,7 +940,7 @@ void setup() {
   LEDPage.insert(portal.host());
   MotorPage.transferEncoding(PageBuilder::TransferEncoding_t::ByteStream);
   MotorPage.insert(portal.host());
-  ledReference = CRGB::White;
+  ledColourReference = CRGB::White;
   led_setup();
 #ifdef ACCELSTEPPER
  setupAccelStepper();
@@ -924,16 +954,45 @@ void loop() {
   // else
   //   digitalWrite(ONBOARD_LED, HIGH);
   portal.handleClient();
+// Handle motor state machine
+  switch (motorState) {
+    case MOVE_TO_0:
+      if (stepper1.distanceToGo() == 0) {
+        stepper1.moveTo(targetSteps);
+        motorState = MOVE_TO_STEPS;
+      }
+      break;
+    case MOVE_TO_STEPS:
+      if (stepper1.distanceToGo() == 0) {
+        stepper1.moveTo(-targetSteps);
+        motorState = MOVE_TO_NEG_STEPS;
+      }
+      break;
+    case MOVE_TO_NEG_STEPS:
+      if (stepper1.distanceToGo() == 0) {
+        stepper1.moveTo(0);
+        motorState = MOVE_TO_FINAL;
+      }
+      break;
+    case MOVE_TO_FINAL:
+      if (stepper1.distanceToGo() == 0) {
+        motorState = IDLE;
+      }
+      break;
+    case IDLE:
+      // Do nothing
+      break;
+  }
+
+  // Run the motor to the current target position
   stepper1.run();
-  if (stepper1.distanceToGo() != 0)
-  {
+
+  if (stepper1.distanceToGo() != 0) {
+    #ifdef VERBOSE
     Serial.print("Seeking targets: Position: ");
     Serial.println(stepper1.currentPosition());
-  }
-  else
+    #endif
+  } else {
     stepper1.disableOutputs();
-
-  //checkAccelStepper();
-  //test_rotation();
-  //Server.handleClient();
+  }
 }
