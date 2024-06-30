@@ -23,13 +23,15 @@
 #include "FastLED.h"
 #if defined(ARDUINO_ARCH_ESP8266)
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
 #include <ESP8266WebServer.h>
 #elif defined(ARDUINO_ARCH_ESP32)
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <WebServer.h>
 #endif
 #include "config.h"
-
+#include <NTPClient.h>
 // #include "WebLED.h"   // Only the LED lighting icon
 
 
@@ -42,7 +44,8 @@ AutoConnect portal;
 const int stepsPerRevolution = 2048;
 
 
-
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
 
 
 #ifdef ACCELSTEPPER
@@ -78,9 +81,17 @@ bool main_lamp_on = false;
 bool second_lamp_on = false;
 bool builtin_lamp_on  =false;
 
+
+int scheduledSweep = 12; // 12:00 PM
+int intervalSweep = 15;  // Every 15 minutes
+int lampTurnOff = 60;    // Turn off after 60 minutes
+long long INTERVAL_ELAPSED = 100000;
+long long timerupdate = 0;
+
+String currentTime;
 // LED Related -----------------------------------------------------------------
 
-
+String remainingSweepTime;
 
 char * ssid  = ssid1;
 char * pass = pass1;
@@ -91,6 +102,7 @@ static const char _NAV_BAR[] PROGMEM = R"(
 <div class="nav-bar common-section">
   <a href="/lighting" class="nav-link">&#128161;</a> <!-- Light bulb icon for Lighting Control -->
   <a href="/motor" class="nav-link">&#9881;</a> <!-- Cogwheel icon for Motor Control -->
+  <a href="/timers" class="nav-link">&#128339;</a> <!-- Clock icon for Timers Page -->
   <a href="/home" class="nav-link">&#8962;</a> <!-- House icon for Home Page -->
 </div>
 )";
@@ -107,30 +119,108 @@ static const char _PAGE_LED[] PROGMEM = R"(
   {{STYLE}}
   </style>
 </head>
+<script type="text/javascript">
+  function setColour() {
+    const selectedColor = document.getElementById('color-picker').value;
+    //window.location.href = `/lighting?led_colour="${selectedColor}"&led_colour=${selectedColor}`;
+    const hex = selectedColor.replace("#", "");
+    const colour = parseInt(hex, 16);
+    window.location.href = `/lighting?led_colour=${colour}`;
+  }
+
+</script>
 <body>
 <div class="main-container">
   {{NAV_BAR}}
   <div class="header common-section">Lighting Control</div>
   <div class="main-section">
     <div class="lrow">
-      <a class="{{BUTTON_STYLE_MAIN}}" href="/lighting?led_main={{LEDIO_ARG_MAIN}}" onclick='setActive(this)'>{{LEDIO_LABEL_MAIN}}</a>
+      <a class="{{BUTTON_STYLE_MAIN}}" href="/lighting?led_main={{LEDIO_ARG_MAIN}}" >{{LEDIO_LABEL_MAIN}}</a>
       <div class="label">Main Lamp</div>
     </div>
     <div class="lrow">
-      <a class="{{BUTTON_STYLE_FIRST}}" href="/lighting?led_first={{LEDIO_ARG_FIRST}}" onclick='setActive(this)'>{{LEDIO_LABEL_FIRST}}</a>
+      <a class="{{BUTTON_STYLE_FIRST}}" href="/lighting?led_first={{LEDIO_ARG_FIRST}}" >{{LEDIO_LABEL_FIRST}}</a>
       <div class="label">First Floor Lamp</div>
     </div>
-  <div class="lrow">
-      <a class="{{BUTTON_STYLE_SECOND}}" href="/lighting?led_second={{LEDIO_ARG_SECOND}}" onclick='setActive(this)'>{{LEDIO_LABEL_SECOND}}</a>
-      <div class="label">Second Floor Lamp</div>
+    <div class="lrow">
+        <a class="{{BUTTON_STYLE_SECOND}}" href="/lighting?led_second={{LEDIO_ARG_SECOND}}" >{{LEDIO_LABEL_SECOND}}</a>
+        <div class="label">Second Floor Lamp</div>
+    </div>
+    <div class="lrow">
+        <div class="control-pair">
+          <label class="control-section-label" for="color-picker">Choose a color:</label>
+          <input type="color" id="color-picker" name="color-picker" value="#ff0000" >
+        </div>
+    </div>
+    <div class="lrow">
+        <a class="button motor-button button-green sweep-button"  href="#" onclick='setColour()' >Set Colour</a>
+        <div class="label">Set main lamp colour</div>
+    </div>
   </div>
-  </div>
-    <div class="footer common-section">ESP8266 Light House Control V1.0.1</div>
+    <div class="footer common-section">ESP8266 Light House Control V1.0.3</div>
 </div>
 </body>
 </html>
 )";
 
+static const char _PAGE_TIMERS[] PROGMEM = R"(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP8266 Timer Control</title>
+  <style type="text/css">
+  {{STYLE}}
+  </style>
+</head>
+<body>
+<script type="text/javascript">
+  function setTimers() {
+    const scheduledSweep = document.getElementById('scheduled-sweep').value;
+    const intervalSweep = document.getElementById('interval-sweep').value;
+    const lampTurnOff = document.getElementById('lamp-turn-off').value;
+    
+    window.location.href = `/timers?scheduledSweep=${scheduledSweep}&intervalSweep=${intervalSweep}&lampTurnOff=${lampTurnOff}`;
+  }
+</script>
+<div class="main-container">
+  {{NAV_BAR}}
+  <div class="header common-section">Timer Control</div>
+  <div class="main-section">
+    <div class="control-section">
+      <div class="timer-control-pair">
+        <label class="control-section-label" for="scheduled-sweep">Set scheduled sweep:</label>
+        <input class="control-section-input" type="time" id="scheduled-sweep" name="scheduled-sweep" value="22:30">
+      </div>
+      <div class="timer-control-pair">
+        <label class="control-section-label" for="interval-sweep">Set interval sweep (minutes):</label>
+        <input class="control-section-input" type="number" id="interval-sweep" name="interval-sweep" min="10" value="60">
+      </div>
+      <div class="timer-control-pair">
+        <label class="control-section-label" for="lamp-turn-off">Set lamp turn off time (minutes):</label>
+        <input class="control-section-input" type="time" id="lamp-turn-off" name="lamp-turn-off" value="23:30">
+      </div>
+      <div class="timer-control-pair">
+        <label class="control-section-label" for="current-time">Current Time: {{CURRENT_TIME}}</label>
+        <span id="current-time" class="control-section-input"></span>
+      </div>
+      <div class="mrow">
+        <div class="timer-control-pair">
+          <label class="control-section-label" for="remaining-time">Minutes until next sweep: {{REMAINING_SWEEP_TIME}}</label>
+          <span id="remaining-time" class="control-section-input"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="mrow">
+      <a class="button timer-button button-green" href="#" onclick='setTimers()'>Set Timers</a>
+    </div>
+  </div>
+  <div class="footer common-section">ESP8266 Timer Control: {{TIMER_LABEL_STATUS}}</div>
+</div>
+</body>
+</html>
+)";
 
 
 static const char _PAGE_MOTOR[] PROGMEM = R"(
@@ -320,6 +410,13 @@ p {
   display: flex;
   align-items: center;
 }
+
+.timer-control-pair {
+    display: block; /* Make each control-pair a block element to stack vertically */
+    width: 100%;
+    margin-bottom: 15px;
+  }
+
 .control-section-input {
   margin-right: 10px; 
 }
@@ -364,12 +461,13 @@ String getArch(PageArgument& args) {
 
 void printPageArguments(const PageArgument& args) {
   for (int i = 0; i < args.size(); ++i) {
-    Serial.print("Argument ");
+    Serial.print("Argument [");
     Serial.print(i);
-    Serial.print(": ");
+    Serial.print("]: [");
     Serial.print(args.argName(i));
-    Serial.print(" = ");
-    Serial.println(args.arg(i));
+    Serial.print("]=[");
+    Serial.print(args.arg(i));
+    Serial.println("]");
   }
 }
 
@@ -435,7 +533,17 @@ String ArgsMainLamp(PageArgument& args) {
 }
 
 
+String processTimerArgs(PageArgument& args) {
+  // Format and return the current timer settings as a status message
+  String status = "Time: " + currentTime + " " + " S,SS: " + String(scheduledSweep) ;
+  status += ",IS: " + String(intervalSweep);
+  status += ",LTO: " + String(lampTurnOff) ;
+  return status;
+}
 
+String getCurrentTime(PageArgument& args) {
+  return currentTime;
+}
 
 
 // Function to process motor arguments
@@ -574,6 +682,53 @@ void processLampArgs(PageArgument& args)
       flashLed();
     }  
   }
+
+  if (args.size() > 0) {
+      //selectedColour  = args.arg("led_colour")
+      Serial.print("processLampArgs called with colour: ");
+      int i = 0;
+      if(args.argName(i) == "led_colour")
+      {
+        // Serial.println("String  match!");
+        // Serial.print("[");
+        // Serial.print(args.argName(i));
+        // Serial.print("]=[");
+        // Serial.print(args.arg(i));
+        // Serial.println("]");
+        // Serial.print("Args size: ");
+        // Serial.println(args.size());
+        int colorValue = args.arg(i).toInt();
+        // Extract RGB components from the decimal color value
+        byte red = (colorValue >> 16) & 0xFF;
+        byte green = (colorValue >> 8) & 0xFF;
+        byte blue = colorValue & 0xFF;
+        // Set the LED color
+        ledColourReference = CRGB(red, green, blue);
+      }
+ 
+  }
+  else
+  {
+    Serial.println("Recieved an unknown argument");
+    int i = 0;
+    if(args.argName(i) == "led_colour")
+    {
+      Serial.println("String  match!");
+      Serial.print("[");
+      Serial.print(args.argName(i));
+      Serial.print("]=[");
+      Serial.print(args.arg(i));
+      Serial.println("]");
+    }
+    else
+    {
+      Serial.println("String does not match");
+      Serial.print(args.argName(i));
+    }
+    //printPageArguments(args);
+
+      flashLed();
+  }  
   delay(1);
 
 }
@@ -789,6 +944,16 @@ PageElement MotorControl(FPSTR(_PAGE_MOTOR), {
 });
 PageBuilder MotorPage("/motor", {MotorControl});
 
+// Page construction for Timers
+PageElement TimerControl(FPSTR(_PAGE_TIMERS), {
+  {"NAV_BAR", [](PageArgument& arg) { return String(FPSTR(_NAV_BAR)); } },
+  {"STYLE", [](PageArgument& arg) { return String(FPSTR(_STYLE_MAIN)); }},
+  {"TIMER_LABEL_STATUS", processTimerArgs},
+  {"CURRENT_TIME",getCurrentTime},
+  {"REMAINING_SWEEP_TIME",[](PageArgument& arg) { return String(remainingSweepTime); } }
+});
+PageBuilder TimerPage("/timers", {TimerControl});
+
 
 #if defined(ARDUINO_ARCH_ESP8266)
 ESP8266WebServer  Server;
@@ -917,6 +1082,8 @@ bool setupWifi()
     return false;
   }
   Serial.println("Connected to " + String(ssid));
+  timeClient.setTimeOffset(0);
+  timeClient.begin();
   return true;
 }
 
@@ -940,10 +1107,13 @@ void setup() {
   LEDPage.insert(portal.host());
   MotorPage.transferEncoding(PageBuilder::TransferEncoding_t::ByteStream);
   MotorPage.insert(portal.host());
+  TimerPage.transferEncoding(PageBuilder::TransferEncoding_t::ByteStream);
+  TimerPage.insert(portal.host());
   ledColourReference = CRGB::White;
   led_setup();
 #ifdef ACCELSTEPPER
  setupAccelStepper();
+ currentTime = timeClient.getFormattedTime();
 
 #endif
 }
@@ -995,4 +1165,19 @@ void loop() {
   } else {
     stepper1.disableOutputs();
   }
+  remainingSweepTime = "20";
+  timerupdate++;
+  if ( timerupdate == INTERVAL_ELAPSED)
+  {
+    timeClient.update();
+    timerupdate = 0;
+    currentTime = timeClient.getFormattedTime();
+    Serial.println(currentTime);
+    Serial.print(timeClient.getHours());
+    Serial.print(":");
+    Serial.println(timeClient.getMinutes());
+    Serial.print("Selected Colour: ");
+    Serial.println(selectedColour);
+  }
+
 }
