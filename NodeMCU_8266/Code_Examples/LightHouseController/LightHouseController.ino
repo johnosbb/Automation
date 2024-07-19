@@ -17,7 +17,7 @@
 #define IN4 D6
 #endif
 
-
+//http://192.168.1.198/lighting
 
 #define STATIC_IP_ADDRESS
 #include "FastLED.h"
@@ -34,7 +34,7 @@
 #include <NTPClient.h>
 // #include "WebLED.h"   // Only the LED lighting icon
 
-
+#include <TimeLib.h>
 #include <AutoConnectCore.h>
 #include <PageBuilder.h>
 
@@ -51,11 +51,16 @@ NTPClient timeClient(ntpUDP);
 #ifdef ACCELSTEPPER
 AccelStepper stepper1(AccelStepper::HALF4WIRE, IN1, IN3, IN2, IN4);
 // Variables to store the motor control state
-enum MotorState { IDLE, MOVE_TO_0, MOVE_TO_STEPS, MOVE_TO_NEG_STEPS, MOVE_TO_FINAL };
+enum MotorState { IDLE, SWEEP, MOVE_TO_STEPS, MOVE_TO_NEG_STEPS, MOVE_TO_FINAL };
 MotorState motorState = IDLE;
 long targetSpeed = 20;
 long targetSteps = 200;
 #endif
+
+String scheduledSweep="23:30";
+String lampTurnOff="23:30";
+String lampTurnOn="23:30";
+String clearEvents="0";
 
 
 //#define VERBOSE
@@ -73,7 +78,10 @@ long targetSteps = 200;
 CRGBArray<NUM_LEDS_MAIN_LAMP> main_leds;
 CRGBArray<NUM_LEDS_FIRST_FLOOR_LAMP> first_floor_led;
 CRGBArray<NUM_LEDS_SECOND_FLOOR_LAMP> second_floor_led;
-CRGB ledColourReference;
+#define COLOR_ORDER GRB // Change this to the appropriate order for your LEDs
+CRGB mainLampColourReference;
+CRGB firstFloorLampColourReference;
+CRGB secondFloorLampColourReference;
 CRGB availableColours[10] = { CRGB::White, CRGB::Blue, CRGB:: CornflowerBlue, CRGB:: DeepSkyBlue, CRGB::DodgerBlue, CRGB::LightBlue ,CRGB:: Cyan, CRGB::Red, CRGB::Orange, CRGB::Green };
 unsigned int selectedColour = 0;
 bool first_lamp_on = false;
@@ -82,13 +90,14 @@ bool second_lamp_on = false;
 bool builtin_lamp_on  =false;
 
 
-int scheduledSweep = 12; // 12:00 PM
-int intervalSweep = 15;  // Every 15 minutes
-int lampTurnOff = 60;    // Turn off after 60 minutes
-long long INTERVAL_ELAPSED = 100000;
+
+long long INTERVAL_ELAPSED = 1000000;
 long long timerupdate = 0;
 
 String currentTime;
+int currentHour = 0;
+int currentMinute = 0;
+int intervalSweep = 60;
 // LED Related -----------------------------------------------------------------
 
 String remainingSweepTime;
@@ -103,7 +112,6 @@ static const char _NAV_BAR[] PROGMEM = R"(
   <a href="/lighting" class="nav-link">&#128161;</a> <!-- Light bulb icon for Lighting Control -->
   <a href="/motor" class="nav-link">&#9881;</a> <!-- Cogwheel icon for Motor Control -->
   <a href="/timers" class="nav-link">&#128339;</a> <!-- Clock icon for Timers Page -->
-  <a href="/home" class="nav-link">&#8962;</a> <!-- House icon for Home Page -->
 </div>
 )";
 
@@ -148,13 +156,12 @@ static const char _PAGE_LED[] PROGMEM = R"(
     </div>
     <div class="lrow">
         <div class="control-pair">
-          <label class="control-section-label" for="color-picker">Choose a color:</label>
+          <label class="control-section-label" for="color-picker">Choose a color: </label>
           <input type="color" id="color-picker" name="color-picker" value="#ff0000" >
         </div>
     </div>
     <div class="lrow">
-        <a class="button motor-button button-green sweep-button"  href="#" onclick='setColour()' >Set Colour</a>
-        <div class="label">Set main lamp colour</div>
+        <a class="control-section button"  href="#" onclick='setColour()' >Set Lamp Colour</a>
     </div>
   </div>
     <div class="footer common-section">ESP8266 Light House Control V1.0.3</div>
@@ -179,41 +186,47 @@ static const char _PAGE_TIMERS[] PROGMEM = R"(
     const scheduledSweep = document.getElementById('scheduled-sweep').value;
     const intervalSweep = document.getElementById('interval-sweep').value;
     const lampTurnOff = document.getElementById('lamp-turn-off').value;
-    
-    window.location.href = `/timers?scheduledSweep=${scheduledSweep}&intervalSweep=${intervalSweep}&lampTurnOff=${lampTurnOff}`;
+    const lampTurnOn = document.getElementById('lamp-turn-on').value;
+    window.location.href = `/timers?scheduledSweep=${scheduledSweep}&intervalSweep=${intervalSweep}&lampTurnOff=${lampTurnOff}&lampTurnOn=${lampTurnOn}`;
+  }
+  function clearEvents() {
+    window.location.href = `/timers?clearEvents=1`;
   }
 </script>
 <div class="main-container">
   {{NAV_BAR}}
   <div class="header common-section">Timer Control</div>
   <div class="main-section">
-    <div class="control-section">
-      <div class="timer-control-pair">
+    <div class="main-section">
+      <div class="control-pair">
         <label class="control-section-label" for="scheduled-sweep">Set scheduled sweep:</label>
-        <input class="control-section-input" type="time" id="scheduled-sweep" name="scheduled-sweep" value="22:30">
+        <input class="control-section-input" type="time" id="scheduled-sweep" name="scheduled-sweep" value="{{SCHEDULED_SWEEP}}">
       </div>
-      <div class="timer-control-pair">
+      <div class="control-pair">
         <label class="control-section-label" for="interval-sweep">Set interval sweep (minutes):</label>
-        <input class="control-section-input" type="number" id="interval-sweep" name="interval-sweep" min="10" value="60">
+        <input class="control-section-input" type="number" id="interval-sweep" name="interval-sweep" min="10" value="{{INTERVAL_SWEEP}}">
       </div>
-      <div class="timer-control-pair">
+      <div class="control-pair">
         <label class="control-section-label" for="lamp-turn-off">Set lamp turn off time (minutes):</label>
-        <input class="control-section-input" type="time" id="lamp-turn-off" name="lamp-turn-off" value="23:30">
+        <input class="control-section-input" type="time" id="lamp-turn-off" name="lamp-turn-off" value="{{LAMP_TURN_OFF}}">
       </div>
-      <div class="timer-control-pair">
+      <div class="control-pair">
+        <label class="control-section-label" for="lamp-turn-on">Set lamp turn on time (minutes):</label>
+        <input class="control-section-input" type="time" id="lamp-turn-on" name="lamp-turn-on" value="{{LAMP_TURN_ON}}">
+      </div>
+      <div class="control-pair">
         <label class="control-section-label" for="current-time">Current Time: {{CURRENT_TIME}}</label>
         <span id="current-time" class="control-section-input"></span>
       </div>
-      <div class="mrow">
-        <div class="timer-control-pair">
+      <div class="control-pair">
           <label class="control-section-label" for="remaining-time">Minutes until next sweep: {{REMAINING_SWEEP_TIME}}</label>
           <span id="remaining-time" class="control-section-input"></span>
-        </div>
       </div>
-    </div>
-
     <div class="mrow">
       <a class="button timer-button button-green" href="#" onclick='setTimers()'>Set Timers</a>
+    </div>
+    <div class="mrow">
+      <a class="button timer-button button-green" href="#" onclick='clearEvents()'>Clear Events</a>
     </div>
   </div>
   <div class="footer common-section">ESP8266 Timer Control: {{TIMER_LABEL_STATUS}}</div>
@@ -360,7 +373,7 @@ p {
   border-radius: 20px;
   background-color: black;
   color: white;
-  padding: 10px 20px;
+  padding: 5px 10px;
   margin-bottom: 2px;
   text-align: center;
   transition: background-color 0.3s ease; 
@@ -369,12 +382,12 @@ p {
   box-sizing: border-box; 
 }
 .motor-button {
-  height: 80px;  
+  height: 60px;  
  
 }
 /* Specific styles for lamp buttons */
 .lamp-button {
-  height: 50px;  
+  height: 30px;  
 
 }
 .button-red {
@@ -413,7 +426,7 @@ p {
 
 .timer-control-pair {
     display: block; /* Make each control-pair a block element to stack vertically */
-    width: 100%;
+    width: 80%;
     margin-bottom: 15px;
   }
 
@@ -422,6 +435,7 @@ p {
 }
 .control-section-label {
   white-space: nowrap;
+  padding: 10px 20px 10px 10px;
 }
 .control-section button {
   margin: 10px 0;
@@ -456,7 +470,47 @@ String getArch(PageArgument& args) {
 #endif
 }
 
+// Scheduled Events
+struct ScheduledEvent {
+  int hour;
+  int minute;
+  bool executed;
+  int interval; // Interval in minutes, 0 if no interval
+  unsigned long lastExecution;
+  void (*action)();  // Function pointer to the action
+};
 
+
+ScheduledEvent events[10]; // Array to store events
+
+
+
+int eventCount = 0;
+
+void addScheduledEvent(const String& timeStr, void (*action)(), int interval = 0) {
+  int hour, minute;
+  parseTimeString(timeStr, hour, minute);
+
+  if (eventCount < 10) {
+    events[eventCount++] = {hour, minute, false, interval, 0, action};
+  } else {
+    Serial.println("Event list is full");
+    eventCount = 0;
+  }
+}
+
+
+void parseTimeString(const String& timeStr, int& hour, int& minute) {
+  int colonIndex = timeStr.indexOf(':');
+  if (colonIndex == -1) {
+    Serial.print("Invalid time format : ");
+    Serial.println(timeStr);
+    return;
+  }
+
+  hour = timeStr.substring(0, colonIndex).toInt();
+  minute = timeStr.substring(colonIndex + 1).toInt();
+}
 
 
 void printPageArguments(const PageArgument& args) {
@@ -533,17 +587,105 @@ String ArgsMainLamp(PageArgument& args) {
 }
 
 
+  // Calculate remaining time to next interval
+  int remainingTime(unsigned long currentMillis, int interval,unsigned long lastExecution)  {
+    if (interval == 0) return -1; // No interval
+
+    unsigned long elapsedMinutes = (currentMillis - lastExecution) / 60000;
+    int remainingMinutes = interval - elapsedMinutes;
+    return remainingMinutes < 0 ? 0 : remainingMinutes;
+  }
+
+void printScheduledEvents(unsigned long currentMillis) {
+  Serial.print("Current Time:" );
+  Serial.println(currentTime);
+  Serial.println("Scheduled Events:");
+  for (int i = 0; i < eventCount; i++) {
+    Serial.print("Event ");
+    Serial.print(i + 1);
+    Serial.print(": ");
+    Serial.print(events[i].hour);
+    Serial.print(":");
+    if (events[i].minute < 10) {
+      Serial.print("0");
+    }
+    Serial.print(events[i].minute);
+    if (events[i].interval > 0) {
+      Serial.print(" every ");
+      Serial.print(events[i].interval);
+      Serial.print(" minutes");
+      int remainingMinutes = remainingTime(currentMillis,events[i].interval,events[i].lastExecution);
+      Serial.print(" (next in ");
+      Serial.print(remainingMinutes);
+      Serial.print(" minutes)");
+    }
+    Serial.println(events[i].executed ? " (executed)" : " (not executed)");
+  }
+}
+
+
 String processTimerArgs(PageArgument& args) {
   // Format and return the current timer settings as a status message
-  String status = "Time: " + currentTime + " " + " S,SS: " + String(scheduledSweep) ;
+  if (args.hasArg("intervalSweep")) {
+      intervalSweep = args.arg("intervalSweep").toInt();
+      #ifdef VERBOSE
+      Serial.print("pTA: intervalSweep:");
+      Serial.println(intervalSweep);
+      #endif
+      if(intervalSweep < 5)
+        addScheduledEvent("00:00", sweep_main_lamp, intervalSweep);
+      else
+        Serial.println("Not setting intervalSweep");
+    }
+  if (args.hasArg("lampTurnOff")) {
+      lampTurnOff = args.arg("lampTurnOff");
+      #ifdef VERBOSE
+      Serial.print("pTA: lampTurnOff:");
+      Serial.println(lampTurnOff);
+      #endif
+      addScheduledEvent(lampTurnOff,turn_off_all_lamps,0);
+    }
+    if (args.hasArg("lampTurnOn")) {
+      lampTurnOn = args.arg("lampTurnOn");
+      #ifdef VERBOSE
+      Serial.print("pTA: lampTurnOn:");
+      Serial.println(lampTurnOn);
+      #endif
+      addScheduledEvent(lampTurnOn,turn_on_all_lamps,0);
+    }
+    if (args.hasArg("scheduledSweep")) {
+      scheduledSweep = args.arg("scheduledSweep");
+      #ifdef VERBOSE
+      Serial.print("pTA: scheduledSweep:");
+      Serial.println(scheduledSweep);
+      #endif
+      addScheduledEvent(scheduledSweep,sweep_main_lamp,0);
+    }
+    if (args.hasArg("clearEvents")) {
+      clearEvents = args.arg("clearEvents");
+      #ifdef VERBOSE
+      Serial.print("pTA: clearEvents:");
+      Serial.println(clearEvents);
+      #endif
+      eventCount = 0;
+
+    }
+    
+  #ifdef VERBOSE  
+  printPageArguments(args);
+  #endif
+  String status = "Time: " + currentTime + " " + " S,SS: " + scheduledSweep ;
   status += ",IS: " + String(intervalSweep);
-  status += ",LTO: " + String(lampTurnOff) ;
+  status += ",LTO: " + lampTurnOff ;
   return status;
 }
 
 String getCurrentTime(PageArgument& args) {
   return currentTime;
 }
+
+
+
 
 
 // Function to process motor arguments
@@ -579,7 +721,7 @@ String processMotorArgs(PageArgument& args) {
             targetSteps = 500;
             targetSpeed = 10;
             stepper1.moveTo(0);
-            motorState = MOVE_TO_0;
+            motorState = SWEEP;
         } else {
             Serial.println("Received an unknown direction");
             flashLed();
@@ -615,14 +757,15 @@ void processLampArgs(PageArgument& args)
     }
     else
     {
-      Serial.println("Recieved an unknown argument");
+      Serial.println("Recieved an unknown argument, or no arguments");
+      printPageArguments(args);
       flashLed();
     }  
   }
   if (args.hasArg("led_main")) {
     if (args.arg("led_main") == "On")
     {
-        turn_on(main_leds,NUM_LEDS_MAIN_LAMP);
+        turn_on(main_leds,NUM_LEDS_MAIN_LAMP,&mainLampColourReference);
         main_lamp_on = true;
     }
     else if (args.arg("led_main") == "Off")
@@ -633,6 +776,7 @@ void processLampArgs(PageArgument& args)
     else
     {
       Serial.println("Recieved an unknown argument");
+      printPageArguments(args);
       flashLed();
     }  
   }
@@ -642,7 +786,7 @@ void processLampArgs(PageArgument& args)
       #ifdef VERBOSE
       Serial.println("Setting first floor lamp on");
       #endif
-      turn_on(first_floor_led, NUM_LEDS_FIRST_FLOOR_LAMP);
+      turn_on(first_floor_led, NUM_LEDS_FIRST_FLOOR_LAMP,&mainLampColourReference);
       first_lamp_on = true;
     }
     else if (args.arg("led_first") == "Off")
@@ -656,6 +800,7 @@ void processLampArgs(PageArgument& args)
     else
     {
       Serial.println("Recieved an unknown argument");
+      printPageArguments(args);
       flashLed();
     }  
   }
@@ -665,7 +810,7 @@ void processLampArgs(PageArgument& args)
       #ifdef VERBOSE
       Serial.println("Setting second floor lamp on");
       #endif
-      turn_on(second_floor_led, NUM_LEDS_SECOND_FLOOR_LAMP);
+      turn_on(second_floor_led, NUM_LEDS_SECOND_FLOOR_LAMP,&mainLampColourReference);
       second_lamp_on = true;
     }
     else if (args.arg("led_second") == "Off")
@@ -679,13 +824,16 @@ void processLampArgs(PageArgument& args)
     else
     {
       Serial.println("Recieved an unknown argument");
+      printPageArguments(args);
       flashLed();
     }  
   }
 
   if (args.size() > 0) {
       //selectedColour  = args.arg("led_colour")
-      Serial.print("processLampArgs called with colour: ");
+      #ifdef VERBOSE
+      Serial.println("processLampArgs called with colour: ");
+      #endif
       int i = 0;
       if(args.argName(i) == "led_colour")
       {
@@ -703,34 +851,19 @@ void processLampArgs(PageArgument& args)
         byte green = (colorValue >> 8) & 0xFF;
         byte blue = colorValue & 0xFF;
         // Set the LED color
-        ledColourReference = CRGB(red, green, blue);
+        mainLampColourReference = CRGB(red, green, blue);
+        #ifdef VERBOSE
+        Serial.print("red:");
+        Serial.println(red);
+        Serial.print("green:");
+        Serial.println(green);
+        Serial.print("blue:");
+        Serial.println(blue);
+        #endif
       }
  
   }
-  else
-  {
-    Serial.println("Recieved an unknown argument");
-    int i = 0;
-    if(args.argName(i) == "led_colour")
-    {
-      Serial.println("String  match!");
-      Serial.print("[");
-      Serial.print(args.argName(i));
-      Serial.print("]=[");
-      Serial.print(args.arg(i));
-      Serial.println("]");
-    }
-    else
-    {
-      Serial.println("String does not match");
-      Serial.print(args.argName(i));
-    }
-    //printPageArguments(args);
-
-      flashLed();
-  }  
   delay(1);
-
 }
 
 
@@ -950,6 +1083,10 @@ PageElement TimerControl(FPSTR(_PAGE_TIMERS), {
   {"STYLE", [](PageArgument& arg) { return String(FPSTR(_STYLE_MAIN)); }},
   {"TIMER_LABEL_STATUS", processTimerArgs},
   {"CURRENT_TIME",getCurrentTime},
+  {"INTERVAL_SWEEP",[](PageArgument& arg) { return String(intervalSweep); } },
+  {"LAMP_TURN_OFF", [](PageArgument& arg) { return lampTurnOff; }},
+  {"LAMP_TURN_ON",[](PageArgument& arg) { return lampTurnOn; }},
+  { "SCHEDULED_SWEEP",[](PageArgument& arg) { return scheduledSweep; } },
   {"REMAINING_SWEEP_TIME",[](PageArgument& arg) { return String(remainingSweepTime); } }
 });
 PageBuilder TimerPage("/timers", {TimerControl});
@@ -989,9 +1126,7 @@ bool setupAutoConnect()
 void show_led_states(CRGB* device, int number_of_leds)
 {
   int i = 0;
-  #ifdef VERBOSE
-    Serial.print("Showing led states\n"); 
-  #endif
+  Serial.print("Showing led states\n"); 
   for(int i = 0; i < number_of_leds; i++) {
     Serial.print(i + 1); // Print LED index (1-based)
     Serial.print(": r=");
@@ -1005,9 +1140,27 @@ void show_led_states(CRGB* device, int number_of_leds)
 }
 #endif
 
+void turn_on_all_lamps()
+{
+  Serial.println("Turning On all Lamps");
+  turn_on(main_leds,NUM_LEDS_MAIN_LAMP,&mainLampColourReference);
+  turn_on(first_floor_led, NUM_LEDS_FIRST_FLOOR_LAMP,&mainLampColourReference);
+  turn_on(second_floor_led, NUM_LEDS_SECOND_FLOOR_LAMP,&mainLampColourReference);
+}
 
+void turn_off_all_lamps()
+{
+  Serial.println("Turning Off all Lamps");
+  turn_off(main_leds,NUM_LEDS_MAIN_LAMP);
+}
 
-void turn_on(CRGB* device, int number_of_leds)
+void sweep_main_lamp()
+{
+  // turn_on(main_leds,NUM_LEDS_MAIN_LAMP,&mainLampColourReference);
+  motorState = SWEEP;
+}
+
+void turn_on(CRGB* device, int number_of_leds,CRGB* colourReference)
 {
     int i = 0;
     #ifdef VERBOSE
@@ -1015,9 +1168,17 @@ void turn_on(CRGB* device, int number_of_leds)
     #endif 
     for(i = 0; i < number_of_leds; i++)
     {
-        device[i].r = ledColourReference.r;
-        device[i].g = ledColourReference.g;
-        device[i].b = ledColourReference.b;
+        device[i].r = colourReference->r;
+        device[i].g = colourReference->g;
+        device[i].b = colourReference->b;
+        #ifdef VERBOSE
+        Serial.print(".red:");
+        Serial.println(device[i].r);
+        Serial.print(".green:");
+        Serial.println(device[i].g);
+        Serial.print(".blue:");
+        Serial.println(device[i].b);
+        #endif
         FastLED.show();
     }
     
@@ -1048,9 +1209,9 @@ void led_setup()
   pinMode(WS2818_MAIN, OUTPUT);
   pinMode(WS2812_FIRST_FLOOR_LAMP, OUTPUT);
   pinMode(WS2812_SECOND_FLOOR_LAMP, OUTPUT);
-  FastLED.addLeds<WS2812,WS2818_MAIN>(main_leds, NUM_LEDS_MAIN_LAMP); //NEOPIXEL
-  FastLED.addLeds<WS2812,WS2812_FIRST_FLOOR_LAMP>(first_floor_led, NUM_LEDS_FIRST_FLOOR_LAMP); //NEOPIXEL
-  FastLED.addLeds<WS2812,WS2812_SECOND_FLOOR_LAMP>(second_floor_led, NUM_LEDS_SECOND_FLOOR_LAMP); //NEOPIXEL
+  FastLED.addLeds<WS2812,WS2818_MAIN,COLOR_ORDER>(main_leds, NUM_LEDS_MAIN_LAMP); //NEOPIXEL
+  FastLED.addLeds<WS2812,WS2812_FIRST_FLOOR_LAMP,COLOR_ORDER>(first_floor_led, NUM_LEDS_FIRST_FLOOR_LAMP); //NEOPIXEL
+  FastLED.addLeds<WS2812,WS2812_SECOND_FLOOR_LAMP,COLOR_ORDER>(second_floor_led, NUM_LEDS_SECOND_FLOOR_LAMP); //NEOPIXEL
   turn_off(main_leds,NUM_LEDS_MAIN_LAMP);
 
 }
@@ -1109,24 +1270,24 @@ void setup() {
   MotorPage.insert(portal.host());
   TimerPage.transferEncoding(PageBuilder::TransferEncoding_t::ByteStream);
   TimerPage.insert(portal.host());
-  ledColourReference = CRGB::White;
+  mainLampColourReference = CRGB::White;
   led_setup();
 #ifdef ACCELSTEPPER
- setupAccelStepper();
- currentTime = timeClient.getFormattedTime();
-
+  setupAccelStepper();
 #endif
+  timeClient.update();
+  setTime(timeClient.getEpochTime());
+  currentTime = timeClient.getFormattedTime();
+  addScheduledEvent("23:30", turn_off_all_lamps);
 }
 
-void loop() {
-  // if (WiFi.status() == WL_CONNECTED)
-  //   digitalWrite(ONBOARD_LED, LOW);
-  // else
-  //   digitalWrite(ONBOARD_LED, HIGH);
-  portal.handleClient();
+
 // Handle motor state machine
+void handle_motor_state()
+{
+
   switch (motorState) {
-    case MOVE_TO_0:
+    case SWEEP:
       if (stepper1.distanceToGo() == 0) {
         stepper1.moveTo(targetSteps);
         motorState = MOVE_TO_STEPS;
@@ -1154,6 +1315,17 @@ void loop() {
       break;
   }
 
+}
+
+void loop() {
+  // if (WiFi.status() == WL_CONNECTED)
+  //   digitalWrite(ONBOARD_LED, LOW);
+  // else
+  //   digitalWrite(ONBOARD_LED, HIGH);
+  portal.handleClient();
+
+  handle_motor_state();
+
   // Run the motor to the current target position
   stepper1.run();
 
@@ -1166,18 +1338,56 @@ void loop() {
     stepper1.disableOutputs();
   }
   remainingSweepTime = "20";
-  timerupdate++;
-  if ( timerupdate == INTERVAL_ELAPSED)
-  {
-    timeClient.update();
-    timerupdate = 0;
-    currentTime = timeClient.getFormattedTime();
+
+    // int currentHour = timeClient.getHours();
+    //   int currentMinute = timeClient.getMinutes();
+    int currentHour = hour();
+    int currentMinute = minute();
+    unsigned long currentMillis = millis();
+
+    for (int i = 0; i < eventCount; i++) {
+      // Handle one-time events
+      if (events[i].interval == 0) {
+        if (currentHour == events[i].hour && currentMinute >= events[i].minute && !events[i].executed) {
+          events[i].action();
+          events[i].executed = true;
+        }
+      }
+      // Handle interval-based events
+      else {
+        unsigned long elapsedMinutes = (currentMillis - events[i].lastExecution) / 60000;
+        if ((elapsedMinutes >= events[i].interval) || (events[i].lastExecution == 0)) {
+          events[i].action();
+          events[i].lastExecution = currentMillis;
+        }
+      }
+    }
+
+    // Reset executed flags at the start of each hour
+    if (currentMinute == 0) {
+      for (int i = 0; i < eventCount; i++) {
+        events[i].executed = false;
+      }
+    }
+    timerupdate++;
+    if ( timerupdate == INTERVAL_ELAPSED)
+    {
+      timeClient.update();
+      currentTime = timeClient.getFormattedTime();
+      setTime(timeClient.getEpochTime());
+      printScheduledEvents(currentMillis);
+      timerupdate = 0;
+    }
+
+ 
+  #ifdef VERBOSE
     Serial.println(currentTime);
     Serial.print(timeClient.getHours());
     Serial.print(":");
     Serial.println(timeClient.getMinutes());
     Serial.print("Selected Colour: ");
     Serial.println(selectedColour);
-  }
+#endif    
+  
 
 }
