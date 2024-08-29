@@ -33,7 +33,8 @@
 #include "config.h"
 #include <NTPClient.h>
 // #include "WebLED.h"   // Only the LED lighting icon
-
+#include <WiFiClient.h>
+#include <PubSubClient.h>
 #include <TimeLib.h>
 #include <AutoConnectCore.h>
 #include <PageBuilder.h>
@@ -62,7 +63,7 @@ String lampTurnOff="23:30";
 String lampTurnOn="23:30";
 String clearEvents="0";
 
-
+bool enable_events = false;
 //#define VERBOSE
 // LED Related -----------------------------------------------------------------
 // WS2812
@@ -89,8 +90,9 @@ bool main_lamp_on = false;
 bool second_lamp_on = false;
 bool builtin_lamp_on  =false;
 
-
-
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+bool mqtt_connected = 0;
 long long INTERVAL_ELAPSED = 1000000;
 long long timerupdate = 0;
 
@@ -537,6 +539,29 @@ void setupAccelStepper()
   stepper1.disableOutputs();
 }
 
+//--------------------------------------
+// function connect called to (re)connect
+// to the broker
+//--------------------------------------
+void MQTTConnect() {
+  while (!mqttClient.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    String mqttClientId  = "ESP8266Client-lighthouse";
+    if (mqttClient.connect(mqttClientId.c_str(), mqtt_username, mqtt_password)) {
+      Serial.println("connected to MQTT");
+      mqtt_connected = 1;
+      if( mqtt_connected)
+        mqttClient.subscribe("stat/#");
+    } else {
+      Serial.print("failed to connect to MQTT, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" will try again in 5 seconds");
+      delay(5000);
+      mqtt_connected = 0;
+    }
+  }
+}
+
 
 void checkAccelStepper()
 {
@@ -733,6 +758,23 @@ String processMotorArgs(PageArgument& args) {
 }
 
 
+void setColour(unsigned int colorValue)
+{
+    // Extract RGB components from the decimal color value
+    byte red = (colorValue >> 16) & 0xFF;
+    byte green = (colorValue >> 8) & 0xFF;
+    byte blue = colorValue & 0xFF;
+    // Set the LED color
+    mainLampColourReference = CRGB(red, green, blue);
+    #ifdef VERBOSE
+    Serial.print("red:");
+    Serial.println(red);
+    Serial.print("green:");
+    Serial.println(green);
+    Serial.print("blue:");
+    Serial.println(blue);
+    #endif
+}
 
 
 void processLampArgs(PageArgument& args)
@@ -846,20 +888,7 @@ void processLampArgs(PageArgument& args)
         // Serial.print("Args size: ");
         // Serial.println(args.size());
         int colorValue = args.arg(i).toInt();
-        // Extract RGB components from the decimal color value
-        byte red = (colorValue >> 16) & 0xFF;
-        byte green = (colorValue >> 8) & 0xFF;
-        byte blue = colorValue & 0xFF;
-        // Set the LED color
-        mainLampColourReference = CRGB(red, green, blue);
-        #ifdef VERBOSE
-        Serial.print("red:");
-        Serial.println(red);
-        Serial.print("green:");
-        Serial.println(green);
-        Serial.print("blue:");
-        Serial.println(blue);
-        #endif
+        setColour(colorValue);
       }
  
   }
@@ -1099,6 +1128,7 @@ WebServer  Server;
 #endif
 
 
+
 bool atDetect(IPAddress& softapIP) {
   Serial.println("Captive portal started, SoftAP IP:" + softapIP.toString());
   return true;
@@ -1152,6 +1182,8 @@ void turn_off_all_lamps()
 {
   Serial.println("Turning Off all Lamps");
   turn_off(main_leds,NUM_LEDS_MAIN_LAMP);
+  turn_off(first_floor_led,NUM_LEDS_FIRST_FLOOR_LAMP);
+  turn_off(second_floor_led,NUM_LEDS_SECOND_FLOOR_LAMP);
 }
 
 void sweep_main_lamp()
@@ -1217,38 +1249,51 @@ void led_setup()
 }
 
 
-bool setupWifi()
-{
-  unsigned int numberOfAttempts = 0;
-  WiFi.disconnect();
-#ifdef STATIC_IP_ADDRESS
-  // Setup WiFi network
-  #if defined(ARDUINO_ARCH_ESP32)
-    WiFi.setMinSecurity(WIFI_AUTH_WEP); // Lower min security to WEP.
-  #endif  
-  WiFi.config(device_ip, gateway_ip, subnet_mask, dns_ip_1, dns_ip_2);
-  WiFi.begin(ssid, pass);
-#else
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, pass);
-#endif
 
-  do {
-    delay(500);
-    numberOfAttempts++;
-  } while ((WiFi.waitForConnectResult() != WL_CONNECTED) && (numberOfAttempts < 10));
-  if(numberOfAttempts  == 10)
-  {
-    Serial.println("Failed to connect to " + String(ssid) + " after " + numberOfAttempts + " attempts.");
-    return false;
+
+void MQTTCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived on topic: '");
+  Serial.print(topic);
+  Serial.print("' with payload: ");
+  // Convert payload to a C-style string
+  char payloadStr[length + 1]; // +1 for null terminator
+  for (unsigned int i = 0; i < length; i++) {
+    payloadStr[i] = (char)payload[i];
   }
-  Serial.println("Connected to " + String(ssid));
-  timeClient.setTimeOffset(0);
-  timeClient.begin();
-  return true;
+  payloadStr[length] = '\0'; // Null-terminate the string
+
+  Serial.println(payloadStr);
+  Serial.println();
+  if(strcmp("stat/LARGELIGHTHOUSE/MAIN_LAMP_ON", topic) == 0)
+  {
+      Serial.print("Turning on main lamp");
+      turn_on(main_leds,NUM_LEDS_MAIN_LAMP,&mainLampColourReference);
+  }
+  else if(strcmp("stat/LARGELIGHTHOUSE/MAIN_LAMP_OFF",topic)== 0)
+  {
+      turn_off(main_leds,NUM_LEDS_MAIN_LAMP);
+  }
+  else if(strcmp("stat/LARGELIGHTHOUSE/ALL_LAMPS_ON", topic) == 0)
+  {
+      Serial.print("Turning on all lamps");
+      turn_on_all_lamps();
+  }
+  else if(strcmp("stat/LARGELIGHTHOUSE/ALL_LAMPS_OFF",topic)== 0)
+  {
+      turn_off_all_lamps();
+  }
+  else if(strcmp("stat/LARGELIGHTHOUSE/SET_COLOUR_BLUE",topic)== 0)
+  {
+    int colorValue = atoi(payloadStr); // or use strtol() for more control
+    Serial.print("Setting colour to: ");
+    Serial.println(colorValue);
+    setColour(colorValue);
+  }
+  else if(strcmp("stat/LARGELIGHTHOUSE/SWEEP",topic)== 0)
+  {
+    sweep_main_lamp();
+  }
 }
-
-
 
 
 
@@ -1275,10 +1320,21 @@ void setup() {
 #ifdef ACCELSTEPPER
   setupAccelStepper();
 #endif
+  timeClient.setTimeOffset(0);
+  timeClient.begin();
   timeClient.update();
   setTime(timeClient.getEpochTime());
   currentTime = timeClient.getFormattedTime();
-  addScheduledEvent("23:30", turn_off_all_lamps);
+  if (enable_events)
+    addScheduledEvent("23:30", turn_off_all_lamps);
+
+  delay(1000);
+  mqttClient.setServer(mqtt_server, mqtt_server_port);
+  mqttClient.setCallback(MQTTCallback);
+  //MQTTConnect();
+  // else
+  //   Serial.println("MQTT Client failed to start .... ");
+
 }
 
 
@@ -1318,6 +1374,14 @@ void handle_motor_state()
 }
 
 void loop() {
+    if (!mqttClient.connected()) {
+      MQTTConnect();
+    }
+  if(mqtt_connected)
+  {
+    delay(2);//allow the cpu to switch to other tasks
+    mqttClient.loop();
+  }
   // if (WiFi.status() == WL_CONNECTED)
   //   digitalWrite(ONBOARD_LED, LOW);
   // else
@@ -1345,28 +1409,32 @@ void loop() {
     int currentMinute = minute();
     unsigned long currentMillis = millis();
 
-    for (int i = 0; i < eventCount; i++) {
-      // Handle one-time events
-      if (events[i].interval == 0) {
-        if (currentHour == events[i].hour && currentMinute >= events[i].minute && !events[i].executed) {
-          events[i].action();
-          events[i].executed = true;
-        }
-      }
-      // Handle interval-based events
-      else {
-        unsigned long elapsedMinutes = (currentMillis - events[i].lastExecution) / 60000;
-        if ((elapsedMinutes >= events[i].interval) || (events[i].lastExecution == 0)) {
-          events[i].action();
-          events[i].lastExecution = currentMillis;
-        }
-      }
-    }
-
-    // Reset executed flags at the start of each hour
-    if (currentMinute == 0) {
+    if(enable_events)
+    {
       for (int i = 0; i < eventCount; i++) {
-        events[i].executed = false;
+        // Handle one-time events
+        if (events[i].interval == 0) {
+          if (currentHour == events[i].hour && currentMinute >= events[i].minute && !events[i].executed) {
+            events[i].action();
+            events[i].executed = true;
+          }
+        }
+        // Handle interval-based events
+        else {
+          unsigned long elapsedMinutes = (currentMillis - events[i].lastExecution) / 60000;
+          if ((elapsedMinutes >= events[i].interval) || (events[i].lastExecution == 0)) {
+            events[i].action();
+            events[i].lastExecution = currentMillis;
+          }
+        }
+      }
+
+
+      // Reset executed flags at the start of each hour
+      if (currentMinute == 0) {
+        for (int i = 0; i < eventCount; i++) {
+          events[i].executed = false;
+        }
       }
     }
     timerupdate++;

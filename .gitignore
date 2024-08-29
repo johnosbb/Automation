@@ -166,6 +166,7 @@ tools/
 # WS28LedProjects/Code_Examples/LightHouseLeds_8266/config_linksys.h
 # ESP32/Code_Examples/AdvancedWebServer/config.h
 ESP32/**/Code_Examples/**/config.h
+ESP32/**/Code_Examples/**/secrets.h
 ESP32/**/Code_Examples/**/config_linksys.h
 StepperMotors/**/Code_Examples/**/config.h
 StepperMotors/**/Code_Examples/**/config_linksys.h
