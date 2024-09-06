@@ -4,12 +4,6 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_ADXL345_U.h>
 
-#include <TensorFlowLite.h>
-#include <tensorflow/lite/micro/all_ops_resolver.h>
-#include <tensorflow/lite/micro/micro_interpreter.h>
-#include <tensorflow/lite/micro/micro_log.h>
-#include <tensorflow/lite/micro/system_setup.h>
-#include <tensorflow/lite/schema/schema_generated.h>
 
 
 #define DEBUG
@@ -46,6 +40,11 @@ const float stdDevRPM = 200.0;
 float threshold = 0.1;  // Vibration threshold in g
 float baseReading = 0.0;
 bool firstRun = true;
+
+
+
+
+
 
 float generateRandomRPM(float mean, float stddev) {
   float u1 = random(0, 10000) / 10000.0;
@@ -103,6 +102,42 @@ float measure_vibration(sensors_event_t event)
   #endif
   return deltaX;
 }
+
+
+void scanI2CDevices(long frequency) {
+  Serial.print("Scanning at ");
+  Serial.print(frequency);
+  Serial.println(" Hz");
+
+  Wire.setClock(frequency);
+
+  byte error, address;
+  int nDevices = 0;
+
+  for (address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+
+    if (error == 0) {
+      Serial.print("I2C device found at address 0x");
+      if (address < 16) 
+        Serial.print("0");
+      Serial.println(address, HEX);
+
+      nDevices++;
+    } else if (error == 4) {
+      Serial.print("Unknown error at address 0x");
+      if (address < 16) 
+        Serial.print("0");
+      Serial.println(address, HEX);
+    }
+  }
+  if (nDevices == 0)
+    Serial.println("No I2C devices found\n");
+  else
+    Serial.println("done\n");
+}
+
 
 void setup() {
   Wire.begin(); // Use default I2C pins (GPIO 4 -> SDA, GPIO 5 -> SCL)
@@ -197,6 +232,12 @@ void loop() {
 #endif
   float current = read_current();
 
-  delay(1000);  // Wait for 1 second before the next loop
+  delay(10000);  // Wait for 1 second before the next loop
+  Serial.println("I2C Scanner starting...");
+  scanI2CDevices(100000); // Scan at 100kHz
+
+  delay(1000);
+
+  scanI2CDevices(400000); // Scan at 400kHz (if supported by the device)
 }
 
