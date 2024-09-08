@@ -1,7 +1,4 @@
-#include <Wire.h>
-#include <Adafruit_SHT4x.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_ADXL345_U.h>
+
 
 #include "model.h"
 
@@ -17,13 +14,6 @@ extern "C" void DebugLog(const char *s) {
   Serial.println(s);  // Use Serial to print logs to the Serial Monitor
 }
 
-//#define DEBUG
-//#define CIRCULAR_BUFFER_DEBUG
-
-// RPM - Mean: 1603.866, Standard Deviation: 195.843
-// Temperature (°C) - Mean: 24.354, Standard Deviation: 4.987
-// Vibration (g) - Mean: 0.120, Standard Deviation: 0.020
-// Current (A) - Mean: 3.494, Standard Deviation: 0.308
 
 bool is_valid              = false;
 bool show_statistics = false;
@@ -33,8 +23,6 @@ const float low_rpm_threshold = 1500.0;           // Low RPM threshold
 const float high_vibration_threshold = 0.60;      // High vibration threshold in g
 const float abnormal_current_low_threshold = 0.2; // Low current threshold in A
 const float abnormal_current_high_threshold = 10.8;// High current threshold in A
-
-constexpr int num_reads = 3;
 
 // Statistical Summary of Features Before Scaling and Balancing:
 // RPM - Mean: 1603.866, Standard Deviation: 195.843
@@ -65,7 +53,6 @@ float   tflu_o_scale      = 0.0f;
 int32_t tflu_i_zero_point = 0;
 int32_t tflu_o_zero_point = 0;
 
-const float temperature_conversion_factor = 3.3f / (1 << 12);
 
 // Statistics counters
 int total_predictions = 0;
@@ -75,28 +62,9 @@ int true_negatives = 0;
 int false_negatives = 0;
 float rolling_accuracy = 0.0;
 
-#ifdef I2C_EXTERNAL
-// Create an instance of the SHT4x sensor
-Adafruit_SHT4x sht4 = Adafruit_SHT4x();
-// Create an instance of the Adafruit_ADXL34 sensor
-Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
-#endif
 
 // Define the pins for RP2040
-const int switchPin = 2;         // GPIO2 for the switch
-const int analogInPin = 26;      // GPIO26 for analog input (ADC)
-
-// Sensitivity value for ACS712-05B (±5A version)
-const float sensitivity = 0.185; // V/A for 5A version
-
-// Voltage divider scaling factor
-const float scale = 4.3;  // Scaling factor for 330kΩ / 100kΩ divider
-
-
-
-float threshold = 0.1;  // Vibration threshold in g
-float baseReading = 0.0;
-bool firstRun = true;
+const int switchPin = 2;         // GPIO2 for the switch, we use the switch to inject fault conditions for test purposes
 
 inline int8_t quantize(float x, float scale, float zero_point)
 {
@@ -153,6 +121,15 @@ void tflu_initialization()
   tflu_i_zero_point = i_quantization->zero_point->data[0];
   tflu_o_scale      = o_quantization->scale->data[0];
   tflu_o_zero_point = o_quantization->zero_point->data[0];
+  // Print the quantization parameters
+  Serial.print("Input scale: ");
+  Serial.println(tflu_i_scale);
+  Serial.print("Input zero point: ");
+  Serial.println(tflu_i_zero_point);
+  Serial.print("Output scale: ");
+  Serial.println(tflu_o_scale);
+  Serial.print("Output zero point: ");
+  Serial.println(tflu_o_zero_point);
 
   Serial.println("TFLu initialization - completed");
 }
@@ -182,65 +159,18 @@ float readRPM() {
   return rpm;
 }
 
-#ifdef I2C_EXTERNAL
-float readVibration()
-{
-  sensors_event_t event;
-  accel.getEvent(&event);
-  float xReading = event.acceleration.x;
 
-  if (firstRun) {
-    baseReading = xReading;
-    firstRun = false;
-  }
-  float deltaX = abs(xReading - baseReading);
-  return deltaX;
-}
-#else
 float readVibration()
 {
   float vibration = generateRandomValue(v_mean, v_std);
   return vibration;
 }
-#endif
 
-void setup() {
-  Wire.begin();
-  pinMode(switchPin, INPUT_PULLUP);
-  Serial.begin(115200);
-  while(!Serial);
-
-  Serial.println("Serial Initialization completed");
-
-#ifdef I2C_EXTERNAL
-  if (!sht4.begin()) {
-    Serial.println("Couldn't find SHT4x sensor!");
-    while (1) delay(10);
-  }
-  if (!accel.begin()) {
-    Serial.println("Couldn't find ADXL345 sensor!");
-    while (1);
-  }
-  accel.setRange(ADXL345_RANGE_4_G);
-  accel.setDataRate(ADXL345_DATARATE_800_HZ);
-#endif  
-  adc_init();
-  adc_set_temp_sensor_enabled(true);
-  tflu_initialization();
-}
-
-#ifdef I2C_EXTERNAL
-float readTemperature() {
-  sensors_event_t humidity, temp;
-  sht4.getEvent(&humidity, &temp);
-  return temp.temperature;
-}
-#else
 float readTemperature()
 {
   return generateRandomValue(t_mean, t_std);
 }
-#endif
+
 
 float readCurrent() {
   return generateRandomValue(c_mean, c_std);
@@ -279,6 +209,17 @@ bool checkFailureConditions(float temperature, float rpm, float vibration, float
 
   return condition_met;  // Return true if failure conditions are met, false otherwise
 }
+
+void setup() {
+  Wire.begin();
+  pinMode(switchPin, INPUT_PULLUP);
+  Serial.begin(115200);
+  while(!Serial);
+  Serial.println("Serial Initialization completed");
+  tflu_initialization();
+}
+
+
 
 void loop() {
   float rpm = 0.0f;
@@ -346,7 +287,6 @@ void loop() {
 
   // Calculate rolling accuracy (percentage of correct predictions)
   rolling_accuracy = (float)(true_positives + true_negatives) / total_predictions * 100.0;
-  show_statistics = true;
   if(show_statistics)
   {
     Serial.println("-----------------------------");
@@ -367,22 +307,19 @@ void loop() {
     Serial.print(" | Vibration: ");
     Serial.print(vibration);
     Serial.print(" m/s^2\n");
-    // Print statistics
+    Serial.println("Total Predictions: "
+     + String(total_predictions)
+     + ", True Positives: " 
+     + String(true_positives) 
+     + ", False Positives: " 
+     + String(false_positives) 
+     + ", True Negatives: " 
+     + String(true_negatives) 
+     + ", False Negatives: " 
+     + String(false_negatives) 
+     + ", Rolling Accuracy (%): " 
+     + String(rolling_accuracy));
 
-    Serial.print("Total Predictions: ");
-    Serial.println(total_predictions);
-    Serial.print("True Positives: ");
-    Serial.println(true_positives);
-    Serial.print("False Positives: ");
-    Serial.println(false_positives);
-    Serial.print("True Negatives: ");
-    Serial.println(true_negatives);
-    Serial.print("False Negatives: ");
-    Serial.println(false_negatives);
-    Serial.print("Rolling Accuracy (%): ");
-    Serial.println(rolling_accuracy);
-      // Ensure to flush the Serial output
-    //Serial.flush();
     show_statistics = false;
 
   }
