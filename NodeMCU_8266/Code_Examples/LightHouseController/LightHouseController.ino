@@ -1139,6 +1139,7 @@ bool setupAutoConnect()
 {
   // Starts user web site included the AutoConnect portal.
   portal.onDetect(atDetect);
+  //portal.config.autoReconnect = true;
   if (portal.begin()) {
     WebServer& server = portal.host();
     Serial.println("Started, IP:" + WiFi.localIP().toString() + " SSID:" + WiFi.SSID());
