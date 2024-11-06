@@ -4,6 +4,7 @@
 #include <Wire.h>
 
 U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
+//U8G2_SSD1306_128X32_UNIVISION_1_HW_I2C u8g2(U8G2_R0);  // assumes I2C
 
  void setup(void) {
    u8g2.begin();
