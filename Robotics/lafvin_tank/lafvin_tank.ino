@@ -1,9 +1,9 @@
 #include <Servo.h>
 #include <IRremote.h>
 // #include <Arduino.h>
-#include <U8g2lib.h>
+#include <U8g2lib.h> // https://github.com/olikraus/u8g2/blob/master/doc/faq.txt#L167 how to reduce memory
 
-
+//#define SERIAL_DEBUG // Uncomment this line to enable serial debugging
 
 U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
 //U8G2_SSD1306_128X32_UNIVISION_1_HW_I2C u8g2(U8G2_R0);  // assumes I2C
@@ -49,63 +49,89 @@ void processIR()
 {
   long ir_rec = 0;
   decode_results results;
+  #ifdef SERIAL_DEBUG
   Serial.println("Checking IR Commands");
+  #endif
   if (irrecv.decode(&results)) {    
     ir_rec = results.value;
+    #ifdef SERIAL_DEBUG
     Serial.print("Received IR code: 0x");
     Serial.println(ir_rec, HEX);  // Print the received code in hex format
+    #endif
     irrecv.resume(); // Receive the next value
   } 
 
   // Check which code was received and execute the corresponding function
   if (ir_rec == 0xFF629D) {
+    #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Move Forward");
+    #endif
     forward();
   }
   else if (ir_rec == 0xFFA857) {
+    #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Move Backward");
+    #endif
     backward();
   }
   else if (ir_rec == 0xFF22DD) { // left arrow
+  #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Turn Left");
+    #endif
     rotateLeft();
   }
   else if (ir_rec == 0xFFC23D) { // right arrow
+  #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Turn Right");
+    #endif
     rotateRight();
   }
   else if (ir_rec == 0xFF30CF) { // key 4
+    #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Rotate Left");
+    #endif
     rotateLeft();
   }
   else if (ir_rec == 0xFF7A85) { // key 6
+    #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Rotate Right");
+    #endif
     rotateRight();
   }
   else if (ir_rec == 0xFF02FD) {
+    #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Stop");
+    #endif
     stopMotors();
+    
 
   }
   else if (ir_rec == 0xFF6897) { //Key number 1
     max_valid_distance = 1000;
   }
   else if (ir_rec == 0xFF9867) { //Key number 2
+    #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Key: 2");
+    #endif
     max_valid_distance = 2000;
+    
   }
   else if (ir_rec == 0xFFB04F) { //Key number 3
     max_valid_distance = 3000;
   }
   else if (ir_rec == 0xFFB04F) { //Key number *
+    #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Key: *");
     Serial.println("IR Command: Enabling Movement");
+    #endif
     movementEnabled = true;
 
   }
   else if (ir_rec == 0xFF52AD) { //Key number #
+    #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Key: #");
     Serial.println("IR Command: Disabling Movement");
+    #endif
     movementEnabled = false;
 
   }
@@ -115,10 +141,34 @@ void processIR()
   }
   else //  main_loop_delay
   {
+    #ifdef SERIAL_DEBUG
     Serial.print("IR Command: Unknown Command: ");
     Serial.println(ir_rec, HEX);
+    #endif
   }
   ir_rec = 0;  // Clear the last command
+}
+
+void printMessageR(char * str)
+{
+  u8g2.clearBuffer();	
+	// clear the internal memory
+  u8g2.setFont(u8g2_font_ncenR08_tr);
+  u8g2.setCursor(4, 28);
+  u8g2.print(str);
+  u8g2.sendBuffer();
+}
+
+
+void printMessageF(const __FlashStringHelper* str)
+{
+  u8g2.clearBuffer();	
+	// clear the internal memory
+  u8g2.setFont(u8g2_font_ncenR12_tr);
+  u8g2.setCursor(4, 28);
+  //u8g2.print(F("Snoop Dog"));	// write something to the internal memory at cursor location x=8,y=29
+  u8g2.print(str);
+  u8g2.sendBuffer();
 }
 
 void setup() {
@@ -139,6 +189,7 @@ void setup() {
   myservo.write(90); // Center position
   delay(SETTLING_DELAY);
   Serial.begin(9600);
+  printMessageF(F("Snoop Dog"));
 					// transfer internal memory to the display
 }
 
@@ -146,7 +197,8 @@ void setup() {
 void Infrared_Obstacle_Avoidance() {
     left_IR_Sensor = digitalRead(LEFT_IR_SENSOR);
     right_IR_Sensor = digitalRead(RIGHT_IR_SENSOR);
-    if (left_IR_Sensor == 0 && right_IR_Sensor == 0) {
+    if (left_IR_Sensor == 0 && right_IR_Sensor == 0) { // both sensors are active
+      printMessageF(F("IR: L & R"));
       stopMotors();
       delay(500);
       backward();
@@ -159,16 +211,19 @@ void Infrared_Obstacle_Avoidance() {
       delay(500);
 
     } else if (left_IR_Sensor == 0 && right_IR_Sensor == 1) {
+      printMessageF(F("IR: L"));
       backward();
       delay(500);
       rotateRight();
       delay(500);
     } else if (left_IR_Sensor == 1 && right_IR_Sensor == 0) {
+      printMessageF(F("IR:  R"));
       backward();
       delay(500);
       rotateLeft();
       delay(500);
     } else {
+      //printMessageF(F("IR: Clear"));
       forward();
 
     }
@@ -219,13 +274,21 @@ float readUltrasonicDistance() {
 }
 
 void detectObstacleDistances() {
+  char buffer[40];
+  #ifdef SERIAL_DEBUG
   Serial.print("Scanning obstacle distances. ");
+  #endif
   DL = getDistanceAtAngle(180); // Left
   DM = getDistanceAtAngle(90);  // Center
   DR = getDistanceAtAngle(0);  // Right
+  sprintf(buffer,"DL=%d,DM=%d,DR=%d",DL,DM,DR);
+  printMessageR(buffer);
   int maxDistance = max(DL, max(DM, DR));
+  delay(SETTLING_DELAY);
+  #ifdef SERIAL_DEBUG
   Serial.print("furthest obstacle is ");
   Serial.println(maxDistance);
+  #endif
 }
 
 
@@ -248,6 +311,7 @@ int getDistanceAtAngle(int angle) {
      moveServo(MIDDLE);
   delay(SETTLING_DELAY);
   int distance = readUltrasonicDistance();
+  #ifdef SERIAL_DEBUG
   Serial.print("Scanning Obstacles on: "); 
   if (angle == 0) {
     Serial.print("Right");
@@ -260,34 +324,40 @@ int getDistanceAtAngle(int angle) {
   }
   Serial.print(", distance: ");
   Serial.println(distance);
+  #endif
   //resumeMotors();
   return distance;
 }
 
 void makeMovementDecision() {
   if (DM < 20 && DM > 0) {
+    #ifdef SERIAL_DEBUG
     Serial.print("Obstacle detected straight ahead at distance: ");
     Serial.println(DM);
+    #endif
+    printMessageF(F("Object Detected"));
     stopMotors();
     delay(1000);
-    detectObstacleDistances();
     if (DL < 50 || DR < 50) {
       chooseTurnDirection();
     } else {
       randomTurn();
     }
   } else {
-    Infrared_Obstacle_Avoidance();
     forward();
   }
 }
 
 void chooseTurnDirection() {
   if (DL > DR) {
+    #ifdef SERIAL_DEBUG
     Serial.println("Turning left to avoid obstacle.");
+    #endif
     rotateLeft();
   } else {
+    #ifdef SERIAL_DEBUG
     Serial.println("Turning right to avoid obstacle.");
+    #endif
     rotateRight();
   }
   delay(500);
@@ -296,10 +366,14 @@ void chooseTurnDirection() {
 
 void randomTurn() {
   if (random(1, 10) > 5) {
+    #ifdef SERIAL_DEBUG
     Serial.println("Choosing random left turn.");
+    #endif
     rotateLeft();
   } else {
+    #ifdef SERIAL_DEBUG
     Serial.println("Choosing random right turn.");
+    #endif
     rotateRight();
   }
   delay(500);
@@ -314,7 +388,9 @@ void forward() {
     analogWrite(LEFT_MOTOR_PWM, motor_speed);
     digitalWrite(RIGHT_MOTOR, CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, motor_speed);
+    #ifdef SERIAL_DEBUG
     Serial.println("Moving forward...");
+    #endif
   }
 }
 
@@ -325,7 +401,9 @@ void backward() {
     analogWrite(LEFT_MOTOR_PWM, MOTOR_SPEED);
     digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_SPEED);
+    #ifdef SERIAL_DEBUG
     Serial.println("Moving backward...");
+    #endif
   }
 }
 
@@ -336,7 +414,9 @@ void turnLeft() {
     analogWrite(LEFT_MOTOR_PWM, MOTOR_TURN_SPEED_LOW);
     digitalWrite(RIGHT_MOTOR, CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
+    #ifdef SERIAL_DEBUG
     Serial.println("Rotating left...");
+    #endif
   }
 }
 
@@ -347,7 +427,9 @@ void turnRight() {
     analogWrite(LEFT_MOTOR_PWM, MOTOR_TURN_SPEED_LOW);
     digitalWrite(RIGHT_MOTOR, CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
+    #ifdef SERIAL_DEBUG
     Serial.println("Rotating right...");
+    #endif
   }
 }
 
@@ -360,7 +442,9 @@ void rotateLeft() {
     analogWrite(LEFT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
     digitalWrite(RIGHT_MOTOR, CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
+    #ifdef SERIAL_DEBUG
     Serial.println("Rotating left...");
+    #endif
   }
 }
 
@@ -371,7 +455,9 @@ void rotateRight() {
     analogWrite(LEFT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
     digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
+    #ifdef SERIAL_DEBUG
     Serial.println("Rotating right...");
+    #endif
   }
 }
 
@@ -380,7 +466,9 @@ void stopMotors() {
     analogWrite(LEFT_MOTOR_PWM, 0);
     digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, 0);
+    #ifdef SERIAL_DEBUG
     Serial.println("Stopping...");
+    #endif
 }
 
 void resumeMotors() {
@@ -392,22 +480,24 @@ void loop() {
   moveServo(MIDDLE);
   distance = readUltrasonicDistance();
   while (distance == 0 || distance > max_valid_distance) {
+    #ifdef SERIAL_DEBUG
     Serial.println("Invalid reading, trying again...");
+    #endif
     distance = readUltrasonicDistance();
     delay(RECOVERY_TIME);
   } 
+  #ifdef SERIAL_DEBUG
   Serial.print("Distance straight ahead: ");
   Serial.println(distance);
+  #endif
   DM = distance;
+  detectObstacleDistances();
   makeMovementDecision();
   processIR();
-  //u8g2.clearBuffer();	
+  Infrared_Obstacle_Avoidance();
   delay(MAIN_LOOP_DELAY_DEFAULT); // this is the amount we travel for
-	// clear the internal memory
-  // //u8g2.setFont(u8g2_font_logisoso28_tr);  // choose a suitable font at https://github.com/olikraus/u8g2/wiki/fntlistall
-  //  u8g2.setFont(u8g2_font_5x7_tr);
-  //  u8g2.drawStr(8,29,"Snoop Dog");	// write something to the internal memory at cursor location x=8,y=29
-  //  u8g2.sendBuffer();
+  u8g2.clearBuffer();	
+  u8g2.sendBuffer();
 }
 
 
