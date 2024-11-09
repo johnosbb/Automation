@@ -6,7 +6,7 @@
 //#define SERIAL_DEBUG // Uncomment this line to enable serial debugging
 
 U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
-//U8G2_SSD1306_128X32_UNIVISION_1_HW_I2C u8g2(U8G2_R0);  // assumes I2C
+
 
 #define RIGHT 180
 #define MIDDLE 90
@@ -23,21 +23,21 @@ U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
 #define MOTOR_SPEED 100
 #define MOTOR_TURN_SPEED_HIGH 255
 #define MOTOR_TURN_SPEED_LOW 100
-#define SETTLING_DELAY 2000
+#define SETTLING_DELAY 1000
 #define DISABLE_MOTORS_DURING_DETECTION 1
 #define MAIN_LOOP_DELAY_DEFAULT 1000
+#define TURN_DELAY 500
 #define RECOVERY_TIME 3000
 #define ULTRA_SONIC_TRIGGER_PIN 12
 #define ULTRA_SONIC_ECHO_PIN 13
 
+#define SAFE_DISTANCE 30  // Example threshold in cm
+
 
 float max_valid_distance = 400.0;
 bool movementEnabled = true;
-float distance;
+bool automationEnabled = true;
 int main_loop_delay = MAIN_LOOP_DELAY_DEFAULT;
-volatile int DL, DM, DR; // Left, Middle, and Right distances
-volatile int left_IR_Sensor;
-volatile int right_IR_Sensor;
 int motor_speed = MOTOR_SPEED;
 char bluetooth_data;
 Servo myservo;
@@ -122,17 +122,20 @@ void processIR()
   else if (ir_rec == 0xFFB04F) { //Key number *
     #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Key: *");
-    Serial.println("IR Command: Enabling Movement");
+    Serial.println("IR Command: Enabling Automation");
     #endif
-    movementEnabled = true;
+    printMessageF(F("Enablng Automation"));
+    automationEnabled = true;
 
   }
   else if (ir_rec == 0xFF52AD) { //Key number #
     #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Key: #");
-    Serial.println("IR Command: Disabling Movement");
+    Serial.println("IR Command: Disabling Automation");
     #endif
-    movementEnabled = false;
+    printMessageF(F("Disablng Automation"));
+    automationEnabled = false;
+    delay(SETTLING_DELAY);
 
   }
   else if (ir_rec == 0x0 || ir_rec == 0xFFFFFF) { //Key number #
@@ -180,11 +183,6 @@ void setup() {
   pinMode(LEFT_MOTOR_PWM, OUTPUT);
   pinMode(RIGHT_MOTOR, OUTPUT);
   pinMode(RIGHT_MOTOR_PWM, OUTPUT);
-  left_IR_Sensor = 0;
-  right_IR_Sensor = 0;
-  DL = 0;
-  DM = 0;
-  DR = 0;
   myservo.attach(ULTRA_SONIC_SERVO);  // Attach the servo at startup
   myservo.write(90); // Center position
   delay(SETTLING_DELAY);
@@ -194,47 +192,24 @@ void setup() {
 }
 
 
-void Infrared_Obstacle_Avoidance() {
-    left_IR_Sensor = digitalRead(LEFT_IR_SENSOR);
-    right_IR_Sensor = digitalRead(RIGHT_IR_SENSOR);
-    if (left_IR_Sensor == 0 && right_IR_Sensor == 0) { // both sensors are active
-      printMessageF(F("IR: L & R"));
-      stopMotors();
-      delay(500);
-      backward();
-      delay(500);
-      if (random(1, 10) > 5) {
-        rotateLeft();;
-      } else {
-        rotateRight();
-      }
-      delay(500);
+int read_ir_sensor_left()
+{
+  return digitalRead(LEFT_IR_SENSOR);
+}
 
-    } else if (left_IR_Sensor == 0 && right_IR_Sensor == 1) {
-      printMessageF(F("IR: L"));
-      backward();
-      delay(500);
-      rotateRight();
-      delay(500);
-    } else if (left_IR_Sensor == 1 && right_IR_Sensor == 0) {
-      printMessageF(F("IR:  R"));
-      backward();
-      delay(500);
-      rotateLeft();
-      delay(500);
-    } else {
-      //printMessageF(F("IR: Clear"));
-      forward();
+int read_ir_sensor_right()
+{
+  return digitalRead(RIGHT_IR_SENSOR);
+}
 
-    }
-    if (Serial.available())
-    {
-      bluetooth_data = Serial.read();
-      if (bluetooth_data == 'S') {
+bool isObstacleDetectedByIR() {
+  if((digitalRead(LEFT_IR_SENSOR) == 0 || digitalRead(RIGHT_IR_SENSOR) == 0))
+  {
+        printMessageF(F("Objected Detected IR"));
+        return true;
+  }
 
-
-      }
-    }
+    return false;
 }
 
 
@@ -273,24 +248,6 @@ float readUltrasonicDistance() {
   return validReadings > 0 ? total / validReadings : 0;
 }
 
-void detectObstacleDistances() {
-  char buffer[40];
-  #ifdef SERIAL_DEBUG
-  Serial.print("Scanning obstacle distances. ");
-  #endif
-  DL = getDistanceAtAngle(180); // Left
-  DM = getDistanceAtAngle(90);  // Center
-  DR = getDistanceAtAngle(0);  // Right
-  sprintf(buffer,"DL=%d,DM=%d,DR=%d",DL,DM,DR);
-  printMessageR(buffer);
-  int maxDistance = max(DL, max(DM, DR));
-  delay(SETTLING_DELAY);
-  #ifdef SERIAL_DEBUG
-  Serial.print("furthest obstacle is ");
-  Serial.println(maxDistance);
-  #endif
-}
-
 
 
 void moveServo(int angle)
@@ -301,6 +258,7 @@ void moveServo(int angle)
 
 int getDistanceAtAngle(int angle) {
   //stopMotors();
+
   if(angle == 180)
   {
     moveServo(LEFT);
@@ -330,39 +288,54 @@ int getDistanceAtAngle(int angle) {
 }
 
 void makeMovementDecision() {
-  if (DM < 20 && DM > 0) {
-    #ifdef SERIAL_DEBUG
-    Serial.print("Obstacle detected straight ahead at distance: ");
-    Serial.println(DM);
-    #endif
-    printMessageF(F("Object Detected"));
-    stopMotors();
-    delay(1000);
-    if (DL < 50 || DR < 50) {
-      chooseTurnDirection();
-    } else {
-      randomTurn();
+    // Read sensor values
+    int DR = getDistanceAtAngle(180);    // Distance on the right (0 degrees)
+    int DM = getDistanceAtAngle(90);   // Distance in the middle (90 degrees)
+    int DL = getDistanceAtAngle(0);  // Distance on the left (180 degrees)
+    int IRL = read_ir_sensor_left();   // IR sensor on the left (0 = object detected)
+    int IRR = read_ir_sensor_right();  // IR sensor on the right (0 = object detected)
+
+    // Check if the middle path is blocked
+    if (DM < SAFE_DISTANCE) {
+        stopMotors();  // Stop if an object is directly ahead
+        printMessageF(F("Object in M"));
+
+        // Decide direction based on side distances and IR sensors
+        if (DL > DR && IRL == 1) {
+            printMessageF(F("Left is clear"));
+            rotateLeft();  // Prefer rotating left if left side is clear
+        } else if (DR > DL && IRR == 1) {
+            printMessageF(F("Right is clear"));
+            rotateRight();  // Prefer rotating right if right side is clear
+        } else if (IRL == 0 && IRR == 1) {
+            printMessageF(F("IR: Object on L"));
+            rotateRight();  // Object detected on the left, rotate right
+        } else if (IRR == 0 && IRL == 1) {
+            printMessageF(F("IR: Object on R"));
+            rotateLeft();   // Object detected on the right, rotate left
+        } else {
+            printMessageF(F("Surrounded"));
+            backward();     // If surrounded by obstacles, move backward
+            randomTurn();   // Take a random turn to reassess
+        }
+    } else { // middle was clear so checking sides
+        // If the middle path is clear, decide based on side sensors
+        if (DL < SAFE_DISTANCE && DR < SAFE_DISTANCE) {
+            printMessageF(F("Middle Clear")); 
+            forward();  // Both sides are close but middle is clear, move forward cautiously
+        } else if (DL < SAFE_DISTANCE) {
+          printMessageF(F("Object on L")); 
+            turnRight();  // Object on the left, turn right
+        } else if (DR < SAFE_DISTANCE) {
+          printMessageF(F("Object on R")); 
+            turnLeft();   // Object on the right, turn left
+        } else {
+            printMessageF(F("Clear Ahead")); 
+            forward();    // Clear path, move forward
+        }
     }
-  } else {
-    forward();
-  }
 }
 
-void chooseTurnDirection() {
-  if (DL > DR) {
-    #ifdef SERIAL_DEBUG
-    Serial.println("Turning left to avoid obstacle.");
-    #endif
-    rotateLeft();
-  } else {
-    #ifdef SERIAL_DEBUG
-    Serial.println("Turning right to avoid obstacle.");
-    #endif
-    rotateRight();
-  }
-  delay(500);
-  forward();
-}
 
 void randomTurn() {
   if (random(1, 10) > 5) {
@@ -417,6 +390,8 @@ void turnLeft() {
     #ifdef SERIAL_DEBUG
     Serial.println("Rotating left...");
     #endif
+    delay(TURN_DELAY);
+    stopMotors();
   }
 }
 
@@ -430,6 +405,8 @@ void turnRight() {
     #ifdef SERIAL_DEBUG
     Serial.println("Rotating right...");
     #endif
+    delay(TURN_DELAY);
+    stopMotors();
   }
 }
 
@@ -445,6 +422,8 @@ void rotateLeft() {
     #ifdef SERIAL_DEBUG
     Serial.println("Rotating left...");
     #endif
+    delay(TURN_DELAY);
+    stopMotors();
   }
 }
 
@@ -458,6 +437,8 @@ void rotateRight() {
     #ifdef SERIAL_DEBUG
     Serial.println("Rotating right...");
     #endif
+    delay(TURN_DELAY);
+    stopMotors();
   }
 }
 
@@ -475,29 +456,38 @@ void resumeMotors() {
   forward(); // Resume forward movement after a stop
 }
 
+void reverseAwayFromObstacle()
+{
+    backward();
+    delay(TURN_DELAY);
+    stopMotors();
+}
+
+
 void loop() {
+  if(isObstacleDetectedByIR())
+  {
+    reverseAwayFromObstacle();
+  }
   processIR();
-  moveServo(MIDDLE);
-  distance = readUltrasonicDistance();
-  while (distance == 0 || distance > max_valid_distance) {
-    #ifdef SERIAL_DEBUG
-    Serial.println("Invalid reading, trying again...");
-    #endif
-    distance = readUltrasonicDistance();
-    delay(RECOVERY_TIME);
-  } 
-  #ifdef SERIAL_DEBUG
-  Serial.print("Distance straight ahead: ");
-  Serial.println(distance);
-  #endif
-  DM = distance;
-  detectObstacleDistances();
-  makeMovementDecision();
+  //moveServo(MIDDLE);
+  if(automationEnabled)
+    makeMovementDecision();
   processIR();
-  Infrared_Obstacle_Avoidance();
+  if(isObstacleDetectedByIR())
+  {
+    reverseAwayFromObstacle();
+  }
   delay(MAIN_LOOP_DELAY_DEFAULT); // this is the amount we travel for
-  u8g2.clearBuffer();	
-  u8g2.sendBuffer();
+  if (Serial.available())
+    {
+      bluetooth_data = Serial.read();
+      if (bluetooth_data == 'S') {
+
+
+      }
+    }
+
 }
 
 
