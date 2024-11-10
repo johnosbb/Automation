@@ -9,8 +9,7 @@ const int LED3_PIN = 10;
 const int SW1_PIN = 8;
 const int SW2_PIN = 7;
 const int SW3_PIN = 6;
-const int LEFT_WS2818 = 4;
-const int RIGHT_WS2818 = 2;
+
 #define ON 1
 #define OFF 0
 
@@ -29,6 +28,10 @@ Timer* leftTimer = NULL;
 Timer* rightTimer = NULL;
 #define LEFT_ACTION 1
 #define RIGHT_ACTION 2
+#define  LEFT_WS2818  4
+#define RIGHT_WS2818 2
+#define RIGHT_EYE RIGHT_WS2818
+#define LEFT_EYE LEFT_WS2818
 
 
 //Led Arrays
@@ -43,7 +46,7 @@ void turnOn(int eye)
 {
   int i = 0;
   CRGB * glassLeds;
-  if(eye == RIGHT_WS2818 )
+  if(eye == RIGHT_EYE )
     glassLeds = ledsRight;
   else
     glassLeds = ledsLeft;
@@ -60,10 +63,16 @@ void turnOff(int eye)
 {
   int i = 0;
   CRGB * glassLeds;
-  if(eye == RIGHT_WS2818 )
+  if(eye == RIGHT_EYE )
+  {
+    Serial.println(F("Turning off Right"));
     glassLeds = ledsRight;
+  }
   else
+  {
+    Serial.println(F("Turning off Left"));
     glassLeds = ledsLeft;
+  }
   for(i =0;i < NUM_LEDS;i++)
   {
     glassLeds[i] = CRGB::Black;
@@ -110,7 +119,7 @@ void programOne()
     leftTimer = mainTimer->setInterval(LEFT_ACTION, 50);  
     if(rightTimer)
       mainTimer->deleteTimer(rightTimer);
-    rightTimer = mainTimer->setInterval(RIGHT_ACTION, 500);;
+    rightTimer = mainTimer->setInterval(RIGHT_ACTION, 50); // was 500
 }
 
 
@@ -119,6 +128,8 @@ void setup() {
     pinMode(LED1_PIN, OUTPUT);
     pinMode(LED2_PIN, OUTPUT);
     pinMode(LED3_PIN, OUTPUT);
+    pinMode(RIGHT_WS2818, OUTPUT);
+    pinMode(LEFT_WS2818, OUTPUT);
     FastLED.addLeds<WS2812, RIGHT_WS2818, GRB>(ledsRight, NUM_LEDS);
     FastLED.addLeds<WS2812, LEFT_WS2818, GRB>(ledsLeft, NUM_LEDS);
     ledColour = CRGB::White;
@@ -130,19 +141,19 @@ void setup() {
     mainTimer->setStaticCallback(programCallback);
 
     // Attach event handlers for each button
-    button1.setClickHandler(handleClick1);
-    button1.setDoubleClickHandler(handleDoubleClick1);
-    button1.setLongClickHandler(handleLongClick1);
+    button1.setClickHandler(handleClickSW1);
+    button1.setDoubleClickHandler(handleDoubleClickSW1);
+    button1.setLongClickHandler(handleLongClickSW1);
 
-    button2.setClickHandler(handleClick2);
-    button2.setDoubleClickHandler(handleDoubleClick2);
-    button2.setLongClickHandler(handleLongClick2);
+    button2.setClickHandler(handleClickSW2);
+    button2.setDoubleClickHandler(handleDoubleClickSW2);
+    button2.setLongClickHandler(handleLongClickSW2);
 
-    button3.setClickHandler(handleClick3);
-    button3.setDoubleClickHandler(handleDoubleClick3);
-    button3.setLongClickHandler(handleLongClick3);
-    turnOn(RIGHT_WS2818);
-    turnOn(LEFT_WS2818);
+    button3.setClickHandler(handleClickSW3);
+    button3.setDoubleClickHandler(handleDoubleClickSW3);
+    button3.setLongClickHandler(handleLongClickSW3);
+    turnOff(RIGHT_WS2818);
+    turnOff(LEFT_WS2818);
     Serial.println(F("Starting Program One"));
     programOne();
 }
@@ -156,56 +167,58 @@ void loop() {
 }
 
 // Event handlers for Button1 (SW1)
-void handleClick1(Button2& btn) {
+void handleClickSW1(Button2& btn) {
     static bool led1State = false;
     led1State = !led1State;
     digitalWrite(LED1_PIN, led1State ? HIGH : LOW);
     Serial.println(F("SW1: click detected"));
 }
 
-void handleDoubleClick1(Button2& btn) {
+void handleDoubleClickSW1(Button2& btn) {
     Serial.println(F("SW1: double click detected"));
     steadyOnLed(LED1_PIN, 3000);  // Turn on LED1 for 3 seconds
 }
 
-void handleLongClick1(Button2& btn) {
+void handleLongClickSW1(Button2& btn) {
     Serial.println(F("SW1: long click detected"));
     flashLed(LED1_PIN, 3000);
 }
 
 // Event handlers for Button2 (SW2)
-void handleClick2(Button2& btn) {
+void handleClickSW2(Button2& btn) {
     static bool led2State = false;
     led2State = !led2State;
     digitalWrite(LED2_PIN, led2State ? HIGH : LOW);
     Serial.println(F("SW2: click detected"));
 }
 
-void handleDoubleClick2(Button2& btn) {
+void handleDoubleClickSW2(Button2& btn) {
     Serial.println(F("SW2: double click detected"));
     steadyOnLed(LED2_PIN, 3000);  // Turn on LED2 for 3 seconds
 }
 
-void handleLongClick2(Button2& btn) {
-    Serial.println(F("SW2: long click detected"));
+void handleLongClickSW2(Button2& btn) {
+    Serial.println(F("SW2: long click detected")); // yellow
+    turnOn(LEFT_EYE);
     flashLed(LED2_PIN, 3000);
 }
 
 // Event handlers for Button3 (SW3)
-void handleClick3(Button2& btn) {
+void handleClickSW3(Button2& btn) {
     static bool led3State = false;
     led3State = !led3State;
     digitalWrite(LED3_PIN, led3State ? HIGH : LOW);
     Serial.println(F("SW3: click detected"));
 }
 
-void handleDoubleClick3(Button2& btn) {
+void handleDoubleClickSW3(Button2& btn) {
     Serial.println(F("SW3: double click detected"));
     steadyOnLed(LED3_PIN, 3000);  // Turn on LED3 for 3 seconds
 }
 
-void handleLongClick3(Button2& btn) {
-    Serial.println(F("SW3: long click detected"));
+void handleLongClickSW3(Button2& btn) {
+    Serial.println(F("SW3: long click detected")); //Blue
+    turnOn(RIGHT_EYE);
     flashLed(LED3_PIN, 3000);
 }
 

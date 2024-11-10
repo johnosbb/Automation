@@ -78,13 +78,13 @@ void processIR()
   #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Turn Left");
     #endif
-    rotateLeft();
+    turnLeft();
   }
   else if (ir_rec == 0xFFC23D) { // right arrow
   #ifdef SERIAL_DEBUG
     Serial.println("IR Command: Turn Right");
     #endif
-    rotateRight();
+    turnRight();
   }
   else if (ir_rec == 0xFF30CF) { // key 4
     #ifdef SERIAL_DEBUG
@@ -399,9 +399,9 @@ void turnRight() {
   if(movementEnabled)
   {
     digitalWrite(LEFT_MOTOR, ANTI_CLOCKWISE);
-    analogWrite(LEFT_MOTOR_PWM, MOTOR_TURN_SPEED_LOW);
-    digitalWrite(RIGHT_MOTOR, CLOCKWISE);
-    analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
+    analogWrite(LEFT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
+    digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
+    analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_LOW);
     #ifdef SERIAL_DEBUG
     Serial.println("Rotating right...");
     #endif
