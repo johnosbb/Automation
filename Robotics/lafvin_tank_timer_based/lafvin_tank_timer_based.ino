@@ -1,13 +1,14 @@
 #include <Servo.h>
 #include <IRremote.h>
+#include <StensTimer.h>
 // #include <Arduino.h>
 #include <U8g2lib.h> // https://github.com/olikraus/u8g2/blob/master/doc/faq.txt#L167 how to reduce memory
 
-//#define SERIAL_DEBUG // Uncomment this line to enable serial debugging
+#define SERIAL_DEBUG // Uncomment this line to enable serial debugging
 
 U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
 
-
+/* Main Defines */
 #define RIGHT 180
 #define MIDDLE 90
 #define LEFT 0
@@ -30,19 +31,33 @@ U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
 #define RECOVERY_TIME 3000
 #define ULTRA_SONIC_TRIGGER_PIN 12
 #define ULTRA_SONIC_ECHO_PIN 13
-
+#define DIRECTION_FORWARD 1
+#define DIRECTION_BACKWARD 2
+#define DIRECTION_STOP 0
 #define SAFE_DISTANCE 30  // Example threshold in cm
 
-
+/* General Globals */
 float max_valid_distance = 400.0;
 bool movementEnabled = true;
 bool automationEnabled = true;
-int main_loop_delay = MAIN_LOOP_DELAY_DEFAULT;
 int motor_speed = MOTOR_SPEED;
 char bluetooth_data;
 Servo myservo;
-
 IRrecv irrecv(3);
+int lastKnownDirection = DIRECTION_STOP;
+
+
+/* Timer Section */
+StensTimer* mainTimer;
+Timer* irDetectTimer = NULL;
+Timer* irReceiveTimer = NULL;
+Timer* MovementTimer = NULL;
+#define IR_DETECT_ACTION 1
+#define IR_RECEIVE_ACTION 2
+#define MOVEMENT_ACTION 3
+
+
+
 
 
 void processIR()
@@ -174,22 +189,64 @@ void printMessageF(const __FlashStringHelper* str)
   u8g2.sendBuffer();
 }
 
-void setup() {
-  u8g2.begin();
-  irrecv.enableIRIn();
-  pinMode(ULTRA_SONIC_TRIGGER_PIN, OUTPUT);
-  pinMode(ULTRA_SONIC_ECHO_PIN, INPUT);
-  pinMode(LEFT_MOTOR, OUTPUT);
-  pinMode(LEFT_MOTOR_PWM, OUTPUT);
-  pinMode(RIGHT_MOTOR, OUTPUT);
-  pinMode(RIGHT_MOTOR_PWM, OUTPUT);
-  myservo.attach(ULTRA_SONIC_SERVO);  // Attach the servo at startup
-  myservo.write(90); // Center position
-  delay(SETTLING_DELAY);
-  Serial.begin(9600);
-  printMessageF(F("Snoop Dog"));
-					// transfer internal memory to the display
+
+
+void programCallback(Timer* timer)
+{
+  int action = timer->getAction();
+    // #ifdef SERIAL_DEBUG 
+    // Serial.println(F("Main Timer Callback"));
+    // #endif
+   /* check if the timer is one we expect */
+  if(IR_DETECT_ACTION == action)
+  {
+    #ifdef SERIAL_DEBUG
+    Serial.println(F("IR_DETECT_ACTION"));
+    #endif
+    if(isObstacleDetectedByIR())
+      reverseAwayFromObstacle();
+  }
+  else if(IR_RECEIVE_ACTION == action){
+    #ifdef SERIAL_DEBUG
+    Serial.println(F("IR_RECEIVE_ACTION"));
+    #endif
+    processIR();
+  }
+  else if(MOVEMENT_ACTION == action)
+  {
+    #ifdef SERIAL_DEBUG 
+    Serial.println(F("MOVEMENT_ACTION"));
+    #endif
+    if(automationEnabled)
+      makeMovementDecision();
+  }
+
 }
+
+
+
+
+
+void programOne(int irDetect, int irReceive, int movementDetect)
+{
+    #ifdef SERIAL_DEBUG 
+    Serial.println(F("Initialising timers"));
+    #endif
+    if(irDetectTimer)
+        mainTimer->deleteTimer(irDetectTimer);
+    irDetectTimer = mainTimer->setInterval(IR_DETECT_ACTION, irDetect);  
+    if(irReceiveTimer)
+      mainTimer->deleteTimer(irReceiveTimer);
+    irReceiveTimer = mainTimer->setInterval(IR_RECEIVE_ACTION, irReceive);
+    if(MovementTimer)
+      mainTimer->deleteTimer(MovementTimer);
+    MovementTimer = mainTimer->setInterval(MOVEMENT_ACTION, movementDetect);  
+}
+
+
+
+
+
 
 
 int read_ir_sensor_left()
@@ -205,8 +262,11 @@ int read_ir_sensor_right()
 bool isObstacleDetectedByIR() {
   if((digitalRead(LEFT_IR_SENSOR) == 0 || digitalRead(RIGHT_IR_SENSOR) == 0))
   {
-        printMessageF(F("Objected Detected IR"));
-        return true;
+      #ifdef SERIAL_DEBUG
+      Serial.print(F("Objected Detected IR "));
+      #endif
+      printMessageF(F("Objected Detected IR"));
+      return true;
   }
 
     return false;
@@ -221,7 +281,7 @@ float readUltrasonicDistance() {
   int validReadings = 0;
   if(DISABLE_MOTORS_DURING_DETECTION)
   {
-    stopMotors();
+    pauseMotors();
     myservo.detach();
   }
 
@@ -244,6 +304,7 @@ float readUltrasonicDistance() {
   if(  DISABLE_MOTORS_DURING_DETECTION)
   {
     myservo.attach(ULTRA_SONIC_SERVO);
+    resumeMotors();
   }
   return validReadings > 0 ? total / validReadings : 0;
 }
@@ -257,7 +318,6 @@ void moveServo(int angle)
 }
 
 int getDistanceAtAngle(int angle) {
-  //stopMotors();
 
   if(angle == 180)
   {
@@ -270,20 +330,19 @@ int getDistanceAtAngle(int angle) {
   delay(SETTLING_DELAY);
   int distance = readUltrasonicDistance();
   #ifdef SERIAL_DEBUG
-  Serial.print("Scanning Obstacles on: "); 
+  Serial.print(F("Scanning Obstacles on: ")); 
   if (angle == 0) {
-    Serial.print("Right");
+    Serial.print(F("Right"));
   } else if (angle == 180) {
-    Serial.print("Left");
+    Serial.print(F("Left"));
   } else if (angle == 90) {
-    Serial.print("Middle");
+    Serial.print(F("Middle"));
   } else {
     Serial.print(angle);  // Print the actual angle if it's not 0, 90, or 180
   }
-  Serial.print(", distance: ");
+  Serial.print(F(", distance: "));
   Serial.println(distance);
   #endif
-  //resumeMotors();
   return distance;
 }
 
@@ -303,34 +362,61 @@ void makeMovementDecision() {
         // Decide direction based on side distances and IR sensors
         if (DL > DR && IRL == 1) {
             printMessageF(F("Left is clear"));
+            #ifdef SERIAL_DEBUG
+            Serial.print(F("Left is Clear")); 
+            #endif
             rotateLeft();  // Prefer rotating left if left side is clear
         } else if (DR > DL && IRR == 1) {
             printMessageF(F("Right is clear"));
+            #ifdef SERIAL_DEBUG
+            Serial.print(F("Right is Clear")); 
+            #endif
             rotateRight();  // Prefer rotating right if right side is clear
         } else if (IRL == 0 && IRR == 1) {
             printMessageF(F("IR: Object on L"));
             rotateRight();  // Object detected on the left, rotate right
+            #ifdef SERIAL_DEBUG
+            Serial.print(F("IR: Object on L")); 
+            #endif
         } else if (IRR == 0 && IRL == 1) {
             printMessageF(F("IR: Object on R"));
+            #ifdef SERIAL_DEBUG
+            Serial.print(F("IR: Object on R")); 
+            #endif
             rotateLeft();   // Object detected on the right, rotate left
         } else {
             printMessageF(F("Surrounded"));
+            #ifdef SERIAL_DEBUG
+            Serial.print(F("Surrounded - backwards and random turn")); 
+            #endif
             backward();     // If surrounded by obstacles, move backward
             randomTurn();   // Take a random turn to reassess
         }
     } else { // middle was clear so checking sides
         // If the middle path is clear, decide based on side sensors
         if (DL < SAFE_DISTANCE && DR < SAFE_DISTANCE) {
-            printMessageF(F("Middle Clear")); 
+            printMessageF(F("Middle Clear"));
+            #ifdef SERIAL_DEBUG
+            Serial.print(F("Middle Clear")); 
+            #endif 
             forward();  // Both sides are close but middle is clear, move forward cautiously
         } else if (DL < SAFE_DISTANCE) {
           printMessageF(F("Object on L")); 
+           #ifdef SERIAL_DEBUG
+            Serial.print(F("Middle Clear, but Object on L")); 
+            #endif
             turnRight();  // Object on the left, turn right
         } else if (DR < SAFE_DISTANCE) {
           printMessageF(F("Object on R")); 
+            #ifdef SERIAL_DEBUG
+            Serial.print(F("Middle Clear, but Object on R")); 
+            #endif
             turnLeft();   // Object on the right, turn left
         } else {
             printMessageF(F("Clear Ahead")); 
+            #ifdef SERIAL_DEBUG
+            Serial.print(F("Clear ahead")); 
+            #endif
             forward();    // Clear path, move forward
         }
     }
@@ -345,7 +431,7 @@ void randomTurn() {
     rotateLeft();
   } else {
     #ifdef SERIAL_DEBUG
-    Serial.println("Choosing random right turn.");
+    Serial.println(F("Choosing random right turn."));
     #endif
     rotateRight();
   }
@@ -362,8 +448,9 @@ void forward() {
     digitalWrite(RIGHT_MOTOR, CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, motor_speed);
     #ifdef SERIAL_DEBUG
-    Serial.println("Moving forward...");
+    Serial.println(F("Moving forward..."));
     #endif
+    lastKnownDirection = DIRECTION_FORWARD;
   }
 }
 
@@ -375,8 +462,9 @@ void backward() {
     digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_SPEED);
     #ifdef SERIAL_DEBUG
-    Serial.println("Moving backward...");
+    Serial.println(F("Moving backward..."));
     #endif
+    lastKnownDirection = DIRECTION_BACKWARD;
   }
 }
 
@@ -388,7 +476,7 @@ void turnLeft() {
     digitalWrite(RIGHT_MOTOR, CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
     #ifdef SERIAL_DEBUG
-    Serial.println("Rotating left...");
+    Serial.println(F("Rotating left..."));
     #endif
     delay(TURN_DELAY);
     stopMotors();
@@ -403,7 +491,7 @@ void turnRight() {
     digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_LOW);
     #ifdef SERIAL_DEBUG
-    Serial.println("Rotating right...");
+    Serial.println(F("Rotating right..."));
     #endif
     delay(TURN_DELAY);
     stopMotors();
@@ -420,7 +508,7 @@ void rotateLeft() {
     digitalWrite(RIGHT_MOTOR, CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
     #ifdef SERIAL_DEBUG
-    Serial.println("Rotating left...");
+    Serial.println(F("Rotating left..."));
     #endif
     delay(TURN_DELAY);
     stopMotors();
@@ -435,7 +523,7 @@ void rotateRight() {
     digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, MOTOR_TURN_SPEED_HIGH);
     #ifdef SERIAL_DEBUG
-    Serial.println("Rotating right...");
+    Serial.println(F("Rotating right..."));
     #endif
     delay(TURN_DELAY);
     stopMotors();
@@ -448,12 +536,43 @@ void stopMotors() {
     digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
     analogWrite(RIGHT_MOTOR_PWM, 0);
     #ifdef SERIAL_DEBUG
-    Serial.println("Stopping...");
+    Serial.println(F("Stopping"));
+    #endif
+    lastKnownDirection = DIRECTION_STOP;
+}
+
+void pauseMotors() {
+    digitalWrite(LEFT_MOTOR, CLOCKWISE);
+    analogWrite(LEFT_MOTOR_PWM, 0);
+    digitalWrite(RIGHT_MOTOR, ANTI_CLOCKWISE);
+    analogWrite(RIGHT_MOTOR_PWM, 0);
+    #ifdef SERIAL_DEBUG
+    Serial.println(F("Pausing Motors"));
     #endif
 }
 
 void resumeMotors() {
-  forward(); // Resume forward movement after a stop
+  if(lastKnownDirection == DIRECTION_FORWARD)
+  {
+    #ifdef SERIAL_DEBUG
+    Serial.println(F("Resuming Forward"));
+    #endif
+    forward(); // Resume forward movement after a stop
+  }
+  else if(lastKnownDirection == DIRECTION_BACKWARD)
+  {
+    #ifdef SERIAL_DEBUG
+    Serial.println(F("Resuming Backward"));
+    #endif
+    backward(); // Resume forward movement after a stop
+  }
+  else
+  {
+    #ifdef SERIAL_DEBUG
+    Serial.println(F("Resuming ... Stop"));
+    #endif
+    stopMotors();
+  }
 }
 
 void reverseAwayFromObstacle()
@@ -463,30 +582,33 @@ void reverseAwayFromObstacle()
     stopMotors();
 }
 
+void setup() {
+  u8g2.begin();
+  irrecv.enableIRIn();
+  pinMode(ULTRA_SONIC_TRIGGER_PIN, OUTPUT);
+  pinMode(ULTRA_SONIC_ECHO_PIN, INPUT);
+  pinMode(LEFT_MOTOR, OUTPUT);
+  pinMode(LEFT_MOTOR_PWM, OUTPUT);
+  pinMode(RIGHT_MOTOR, OUTPUT);
+  pinMode(RIGHT_MOTOR_PWM, OUTPUT);
+  myservo.attach(ULTRA_SONIC_SERVO);  // Attach the servo at startup
+  myservo.write(90); // Center position
+  delay(SETTLING_DELAY);
+  Serial.begin(9600);
+  printMessageF(F("Snoop Dog"));
+  mainTimer = StensTimer::getInstance(); // the order of these next three instructions is important, set the static callback before setting timer intervals
+  mainTimer->setStaticCallback(programCallback);
+  programOne(100,200,2000);
+					// transfer internal memory to the display
+}
+
 
 void loop() {
-  if(isObstacleDetectedByIR())
-  {
-    reverseAwayFromObstacle();
-  }
-  processIR();
-  //moveServo(MIDDLE);
-  if(automationEnabled)
-    makeMovementDecision();
-  processIR();
-  if(isObstacleDetectedByIR())
-  {
-    reverseAwayFromObstacle();
-  }
-  delay(MAIN_LOOP_DELAY_DEFAULT); // this is the amount we travel for
-  // if (Serial.available())
-  //   {
-  //     bluetooth_data = Serial.read();
-  //     if (bluetooth_data == 'S') {
+  // Ensure the main timer processes all scheduled tasks
+  mainTimer->run();
 
-
-  //     }
-  //   }
+  // Adding a small delay to avoid continuous loop iteration without processing delays
+  delay(10);
 
 }
 
