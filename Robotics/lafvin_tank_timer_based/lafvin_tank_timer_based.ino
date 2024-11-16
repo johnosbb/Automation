@@ -5,6 +5,7 @@
 #include <U8g2lib.h> // https://github.com/olikraus/u8g2/blob/master/doc/faq.txt#L167 how to reduce memory
 
 #define SERIAL_DEBUG // Uncomment this line to enable serial debugging
+#define USE_IR_SENSORS 0  // Set to 1 to use IR sensors, 0 to disable them
 
 U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
 
@@ -203,8 +204,8 @@ void programCallback(Timer* timer)
     #ifdef SERIAL_DEBUG
     Serial.println(F("IR_DETECT_ACTION"));
     #endif
-    if(isObstacleDetectedByIR())
-      reverseAwayFromObstacle();
+    // if(isObstacleDetectedByIR())
+    //   reverseAwayFromObstacle();
   }
   else if(IR_RECEIVE_ACTION == action){
     #ifdef SERIAL_DEBUG
@@ -348,79 +349,64 @@ int getDistanceAtAngle(int angle) {
 
 void makeMovementDecision() {
     // Read sensor values
-    int DR = getDistanceAtAngle(180);    // Distance on the right (0 degrees)
     int DM = getDistanceAtAngle(90);   // Distance in the middle (90 degrees)
-    int DL = getDistanceAtAngle(0);  // Distance on the left (180 degrees)
-    int IRL = read_ir_sensor_left();   // IR sensor on the left (0 = object detected)
-    int IRR = read_ir_sensor_right();  // IR sensor on the right (0 = object detected)
+    if(DM == 0)
+    {
+        #ifdef SERIAL_DEBUG
+        Serial.print(F("0 distance:"));
+        Serial.println(DM);
+        #endif
+        printMessageF(F("0 Middle Distance"));
+    }
+    // Assume the sides are clear since IR sensors are removed
+    int sidesAreClear = 1;
 
-    // Check if the middle path is blocked
-    if (DM < SAFE_DISTANCE) {
-        stopMotors();  // Stop if an object is directly ahead
-        printMessageF(F("Object in M"));
+    // Prioritize moving forward if the middle path is clear and sides are clear
+    if ((DM >= SAFE_DISTANCE && sidesAreClear) || (DM == 0)) {
+        printMessageF(F("Clear Ahead"));
+        #ifdef SERIAL_DEBUG
+        Serial.println(F("Clear ahead"));
+        #endif
+        forward();  // Continue moving forward if no object is detected ahead and sides are clear
+        return;     // Exit the function to avoid unnecessary checks
+    } else {
+        printMessageF(F("Object Middle"));
+        #ifdef SERIAL_DEBUG
+        Serial.print(F("Object Middle:"));
+        Serial.print(DM);
+        #endif
+    }
 
-        // Decide direction based on side distances and IR sensors
-        if (DL > DR && IRL == 1) {
-            printMessageF(F("Left is clear"));
-            #ifdef SERIAL_DEBUG
-            Serial.print(F("Left is Clear")); 
-            #endif
-            rotateLeft();  // Prefer rotating left if left side is clear
-        } else if (DR > DL && IRR == 1) {
-            printMessageF(F("Right is clear"));
-            #ifdef SERIAL_DEBUG
-            Serial.print(F("Right is Clear")); 
-            #endif
-            rotateRight();  // Prefer rotating right if right side is clear
-        } else if (IRL == 0 && IRR == 1) {
-            printMessageF(F("IR: Object on L"));
-            rotateRight();  // Object detected on the left, rotate right
-            #ifdef SERIAL_DEBUG
-            Serial.print(F("IR: Object on L")); 
-            #endif
-        } else if (IRR == 0 && IRL == 1) {
-            printMessageF(F("IR: Object on R"));
-            #ifdef SERIAL_DEBUG
-            Serial.print(F("IR: Object on R")); 
-            #endif
-            rotateLeft();   // Object detected on the right, rotate left
-        } else {
-            printMessageF(F("Surrounded"));
-            #ifdef SERIAL_DEBUG
-            Serial.print(F("Surrounded - backwards and random turn")); 
-            #endif
-            backward();     // If surrounded by obstacles, move backward
-            randomTurn();   // Take a random turn to reassess
-        }
-    } else { // middle was clear so checking sides
-        // If the middle path is clear, decide based on side sensors
-        if (DL < SAFE_DISTANCE && DR < SAFE_DISTANCE) {
-            printMessageF(F("Middle Clear"));
-            #ifdef SERIAL_DEBUG
-            Serial.print(F("Middle Clear")); 
-            #endif 
-            forward();  // Both sides are close but middle is clear, move forward cautiously
-        } else if (DL < SAFE_DISTANCE) {
-          printMessageF(F("Object on L")); 
-           #ifdef SERIAL_DEBUG
-            Serial.print(F("Middle Clear, but Object on L")); 
-            #endif
-            turnRight();  // Object on the left, turn right
-        } else if (DR < SAFE_DISTANCE) {
-          printMessageF(F("Object on R")); 
-            #ifdef SERIAL_DEBUG
-            Serial.print(F("Middle Clear, but Object on R")); 
-            #endif
-            turnLeft();   // Object on the right, turn left
-        } else {
-            printMessageF(F("Clear Ahead")); 
-            #ifdef SERIAL_DEBUG
-            Serial.print(F("Clear ahead")); 
-            #endif
-            forward();    // Clear path, move forward
-        }
+    // Stop movement and check surroundings if the middle path is blocked
+    stopMotors();
+    
+    int DR = getDistanceAtAngle(180);  // Distance on the right (0 degrees)
+    int DL = getDistanceAtAngle(0);    // Distance on the left (180 degrees)
+
+    // Decide on direction based on side distances
+    if (DL > DR) {
+        printMessageF(F("Left is clear"));
+        #ifdef SERIAL_DEBUG
+        Serial.print(F("Left is Clear"));
+        #endif
+        rotateLeft();  // Prefer rotating left if the left side is clear
+    } else if (DR > DL) {
+        printMessageF(F("Right is clear"));
+        #ifdef SERIAL_DEBUG
+        Serial.print(F("Right is Clear"));
+        #endif
+        rotateRight();  // Prefer rotating right if the right side is clear
+    } else {
+        // If surrounded or no clear side, move backward and take a random turn
+        printMessageF(F("Surrounded"));
+        #ifdef SERIAL_DEBUG
+        Serial.print(F("Surrounded - backwards and random turn"));
+        #endif
+        backward();     // If surrounded, move backward
+        randomTurn();   // Take a random turn to reassess the situation
     }
 }
+
 
 
 void randomTurn() {
