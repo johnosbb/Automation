@@ -1,6 +1,25 @@
 #include <Button2.h>
 #include <FastLED.h>
 #include <StensTimer.h>
+#include <Arduino.h>
+#include <U8g2lib.h>
+
+#ifdef U8X8_HAVE_HW_SPI
+#include <SPI.h>
+#endif
+#ifdef U8X8_HAVE_HW_I2C
+#include <Wire.h>
+#endif
+
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+
+
+U8G2_SSD1306_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+
+
+
 
 // Pin Definitions
 const int LED1_PIN = 12;
@@ -134,9 +153,19 @@ void programOne(int left_frequency, int intermediate_frequency)
     rightTimer = mainTimer->setInterval(RIGHT_ACTION, left_frequency + intermediate_frequency); // was 500
 }
 
+// void u8g2_prepare(void) {
+//   u8g2.setFont(u8g2_font_6x10_tf);
+//   u8g2.setFontRefHeightExtendedText();
+//   u8g2.setDrawColor(1);
+//   u8g2.setFontPosTop();
+//   u8g2.setFontDirection(0);
+// }
+
+
 
 void setup() {
     // Set up LEDs
+    u8g2.begin();
     pinMode(LED1_PIN, OUTPUT);
     pinMode(LED2_PIN, OUTPUT);
     pinMode(LED3_PIN, OUTPUT);
@@ -167,8 +196,32 @@ void setup() {
     turnOff(RIGHT_WS2818);
     turnOff(LEFT_WS2818);
     Serial.println(F("Starting Program One"));
+    // u8g2_prepare();
+    u8g2.begin();
     programOne(10,10);
+    printMessageF(F("Selected Program One"));
 }
+
+void printMessageR(char * str)
+{
+  u8g2.clearBuffer();	// clear the internal memory
+  u8g2.setFont(u8g2_font_ncenR08_tr);
+  u8g2.setCursor(4, 28);
+  u8g2.print(str);
+  u8g2.sendBuffer();
+}
+
+
+void printMessageF(const __FlashStringHelper* str)
+{
+  u8g2.clearBuffer();	// clear the internal memory
+  u8g2.setFont(u8g2_font_ncenR12_tr);
+  u8g2.setCursor(4, 28);
+  u8g2.print(str);
+  u8g2.sendBuffer();
+}
+
+
 
 void loop() {
     // Continuously check button states
@@ -176,6 +229,7 @@ void loop() {
     button2.loop();
     button3.loop();
     mainTimer->run();
+
 }
 
 // Event handlers for Button1 (SW1)

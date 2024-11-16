@@ -170,8 +170,7 @@ void processIR()
 
 void printMessageR(char * str)
 {
-  u8g2.clearBuffer();	
-	// clear the internal memory
+  u8g2.clearBuffer();	// clear the internal memory
   u8g2.setFont(u8g2_font_ncenR08_tr);
   u8g2.setCursor(4, 28);
   u8g2.print(str);
@@ -181,11 +180,9 @@ void printMessageR(char * str)
 
 void printMessageF(const __FlashStringHelper* str)
 {
-  u8g2.clearBuffer();	
-	// clear the internal memory
+  u8g2.clearBuffer();	// clear the internal memory
   u8g2.setFont(u8g2_font_ncenR12_tr);
   u8g2.setCursor(4, 28);
-  //u8g2.print(F("Snoop Dog"));	// write something to the internal memory at cursor location x=8,y=29
   u8g2.print(str);
   u8g2.sendBuffer();
 }
