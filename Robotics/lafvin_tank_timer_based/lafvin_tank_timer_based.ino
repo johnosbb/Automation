@@ -3,11 +3,17 @@
 #include <StensTimer.h>
 // #include <Arduino.h>
 #include <U8g2lib.h> // https://github.com/olikraus/u8g2/blob/master/doc/faq.txt#L167 how to reduce memory
+#include <Adafruit_GFX.h>
+#include "Adafruit_VL6180X.h"
 
-#define SERIAL_DEBUG // Uncomment this line to enable serial debugging
-#define USE_IR_SENSORS 0  // Set to 1 to use IR sensors, 0 to disable them
 
-U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
+//#define SERIAL_DEBUG // Uncomment this line to enable serial debugging
+
+
+Adafruit_VL6180X vl = Adafruit_VL6180X();
+//U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes hardware I2C
+// Use software I²C directly with U8G2
+U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C u8g2(U8G2_R0, /* clock=*/8, /* data=*/9, /* reset=*/U8X8_PIN_NONE);
 
 /* Main Defines */
 #define RIGHT 180
@@ -19,8 +25,8 @@ U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
 #define RIGHT_MOTOR 4
 #define LEFT_MOTOR_PWM 5
 #define RIGHT_MOTOR_PWM 6
-#define LEFT_IR_SENSOR A1
-#define RIGHT_IR_SENSOR A2
+#define LEFT_MICRO_SWITCH A1
+#define RIGHT_MICRO_SWITCH A2
 #define ULTRA_SONIC_SERVO 10
 #define MOTOR_SPEED 100
 #define MOTOR_TURN_SPEED_HIGH 255
@@ -28,7 +34,7 @@ U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);  // assumes I2C
 #define SETTLING_DELAY 1000
 #define DISABLE_MOTORS_DURING_DETECTION 1
 #define MAIN_LOOP_DELAY_DEFAULT 1000
-#define TURN_DELAY 500
+#define TURN_DELAY 400
 #define RECOVERY_TIME 3000
 #define ULTRA_SONIC_TRIGGER_PIN 12
 #define ULTRA_SONIC_ECHO_PIN 13
@@ -43,20 +49,21 @@ bool movementEnabled = true;
 bool automationEnabled = true;
 int motor_speed = MOTOR_SPEED;
 char bluetooth_data;
-Servo myservo;
+Servo UltraSonicServo;
 IRrecv irrecv(3);
 int lastKnownDirection = DIRECTION_STOP;
 
 
 /* Timer Section */
 StensTimer* mainTimer;
-Timer* irDetectTimer = NULL;
+Timer* microSwitchDetectTimer = NULL;
+Timer* laserDetectTimer = NULL;
 Timer* irReceiveTimer = NULL;
 Timer* MovementTimer = NULL;
-#define IR_DETECT_ACTION 1
+#define MIRCO_DETECT_ACTION 1
 #define IR_RECEIVE_ACTION 2
 #define MOVEMENT_ACTION 3
-
+#define LASER_DETECT_ACTION 4
 
 
 
@@ -76,6 +83,8 @@ void processIR()
     #endif
     irrecv.resume(); // Receive the next value
   } 
+  else
+    return;
 
   // Check which code was received and execute the corresponding function
   if (ir_rec == 0xFF629D) {
@@ -156,9 +165,8 @@ void processIR()
   }
   else if (ir_rec == 0x0 || ir_rec == 0xFFFFFF) { //Key number #
 
-
   }
-  else //  main_loop_delay
+  else 
   {
     #ifdef SERIAL_DEBUG
     Serial.print(F("IR Command: Unknown Command: "));
@@ -196,13 +204,19 @@ void programCallback(Timer* timer)
     // Serial.println(F("Main Timer Callback"));
     // #endif
    /* check if the timer is one we expect */
-  if(IR_DETECT_ACTION == action)
+  if(MIRCO_DETECT_ACTION == action)
   {
     #ifdef SERIAL_DEBUG
-    Serial.println(F("IR_DETECT_ACTION"));
+    Serial.println(F("MIRCO_DETECT_ACTION"));
     #endif
-    // if(isObstacleDetectedByIR())
-    //   reverseAwayFromObstacle();
+    if(isObstacleDetectedByMicroSwitches())
+      reverseAwayFromObstacle();
+  }
+  else if(LASER_DETECT_ACTION == action){
+    #ifdef SERIAL_DEBUG
+    Serial.println(F("LASER_DETECT_ACTION"));
+    #endif
+    laserDetect();
   }
   else if(IR_RECEIVE_ACTION == action){
     #ifdef SERIAL_DEBUG
@@ -225,14 +239,17 @@ void programCallback(Timer* timer)
 
 
 
-void programOne(int irDetect, int irReceive, int movementDetect)
+void programOne(int microSwitchDetect, int irReceive, int movementDetect)
 {
     #ifdef SERIAL_DEBUG 
     Serial.println(F("Initialising timers"));
     #endif
-    if(irDetectTimer)
-        mainTimer->deleteTimer(irDetectTimer);
-    irDetectTimer = mainTimer->setInterval(IR_DETECT_ACTION, irDetect);  
+    if(microSwitchDetectTimer)
+        mainTimer->deleteTimer(microSwitchDetectTimer);
+    microSwitchDetectTimer = mainTimer->setInterval(MIRCO_DETECT_ACTION, microSwitchDetect); 
+    if(laserDetectTimer)
+        mainTimer->deleteTimer(laserDetectTimer);
+    laserDetectTimer = mainTimer->setInterval(LASER_DETECT_ACTION, laserDetect);  
     if(irReceiveTimer)
       mainTimer->deleteTimer(irReceiveTimer);
     irReceiveTimer = mainTimer->setInterval(IR_RECEIVE_ACTION, irReceive);
@@ -247,23 +264,23 @@ void programOne(int irDetect, int irReceive, int movementDetect)
 
 
 
-int read_ir_sensor_left()
+int read_microswitch_left()
 {
-  return digitalRead(LEFT_IR_SENSOR);
+  return digitalRead(LEFT_MICRO_SWITCH);
 }
 
-int read_ir_sensor_right()
+int read_microswitch_right()
 {
-  return digitalRead(RIGHT_IR_SENSOR);
+  return digitalRead(RIGHT_MICRO_SWITCH);
 }
 
-bool isObstacleDetectedByIR() {
-  if((digitalRead(LEFT_IR_SENSOR) == 0 || digitalRead(RIGHT_IR_SENSOR) == 0))
+bool isObstacleDetectedByMicroSwitches() {
+  if((digitalRead(LEFT_MICRO_SWITCH) == 0 || digitalRead(RIGHT_MICRO_SWITCH) == 0))
   {
       #ifdef SERIAL_DEBUG
-      Serial.print(F("Objected Detected IR "));
+      Serial.print(F("Objected Detected Micro Switches "));
       #endif
-      printMessageF(F("Objected Detected IR"));
+      printMessageF(F("Objected Detected Micro Switches"));
       return true;
   }
 
@@ -280,7 +297,7 @@ float readUltrasonicDistance() {
   if(DISABLE_MOTORS_DURING_DETECTION)
   {
     pauseMotors();
-    myservo.detach();
+    UltraSonicServo.detach();
   }
 
   for (int i = 0; i < readings; i++) {
@@ -301,7 +318,7 @@ float readUltrasonicDistance() {
   }
   if(  DISABLE_MOTORS_DURING_DETECTION)
   {
-    myservo.attach(ULTRA_SONIC_SERVO);
+    UltraSonicServo.attach(ULTRA_SONIC_SERVO);
     resumeMotors();
   }
   return validReadings > 0 ? total / validReadings : 0;
@@ -311,7 +328,7 @@ float readUltrasonicDistance() {
 
 void moveServo(int angle)
 {
-    myservo.write(angle);
+    UltraSonicServo.write(angle);
     delay(SETTLING_DELAY);
 }
 
@@ -411,15 +428,17 @@ void randomTurn() {
     #ifdef SERIAL_DEBUG
     Serial.println("Choosing random left turn.");
     #endif
+    printMessageF(F("Random Left"));
     rotateLeft();
   } else {
     #ifdef SERIAL_DEBUG
     Serial.println(F("Choosing random right turn."));
     #endif
+    printMessageF(F("Random Right"));
     rotateRight();
   }
-  delay(500);
-  forward();
+  delay(TURN_DELAY/2); // make the turn small
+  stopMotors();
 }
 
 // Movement Control Functions
@@ -561,8 +580,103 @@ void resumeMotors() {
 void reverseAwayFromObstacle()
 {
     backward();
-    delay(TURN_DELAY*2);
+    delay(TURN_DELAY*4);
     stopMotors();
+}
+
+
+void setupLaserSensor()
+{
+
+  if (! vl.begin()) {
+    #ifdef SERIAL_DEBUG
+    Serial.println(F("Failed to find sensor"));
+    #endif
+    printMessageF(F("Laser failed"));
+    while (1);
+  }
+  #ifdef SERIAL_DEBUG
+  Serial.println("Sensor found!");
+  #endif
+  printMessageF(F("Laser ok"));
+}
+
+void laserDetect()
+{
+    float lux = vl.readLux(VL6180X_ALS_GAIN_5);
+    #ifdef SERIAL_DEBUG
+    Serial.print(F("Lux: ")); Serial.println(lux);
+    #endif
+    uint8_t range = vl.readRange();
+    uint8_t status = vl.readRangeStatus();
+
+    if (status == VL6180X_ERROR_NONE) {
+      #ifdef SERIAL_DEBUG
+      Serial.print(F("Range: ")); Serial.println(range);
+      Serial.println();
+      #endif
+      printMessageF(F("Laser in Range"));
+      if ( range < 15 )
+        reverseAwayFromObstacle();
+      else
+        stopMotors();
+      return;
+
+
+    } else {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("Error obtaining Range: ")); 
+      #endif
+      return;
+    }
+
+    // Some error occurred, print it out!
+    
+    if  ((status >= VL6180X_ERROR_SYSERR_1) && (status <= VL6180X_ERROR_SYSERR_5)) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("System error"));
+      #endif
+    }
+    else if (status == VL6180X_ERROR_ECEFAIL) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("ECE failure"));
+      #endif
+    }
+    else if (status == VL6180X_ERROR_NOCONVERGE) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("No convergence"));
+      #endif
+    }
+    else if (status == VL6180X_ERROR_RANGEIGNORE) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("Ignoring range"));
+      #endif
+    }
+    else if (status == VL6180X_ERROR_SNR) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("Signal/Noise error"));
+      #endif
+    }
+    else if (status == VL6180X_ERROR_RAWUFLOW) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("Raw reading underflow"));
+      #endif
+    }
+    else if (status == VL6180X_ERROR_RAWOFLOW) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("Raw reading overflow"));
+      #endif
+    }
+    else if (status == VL6180X_ERROR_RANGEUFLOW) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("Range reading underflow"));
+      #endif
+    }
+    else if (status == VL6180X_ERROR_RANGEOFLOW) {
+      #ifdef SERIAL_DEBUG
+      Serial.println(F("Range reading overflow"));
+      #endif
+    }
 }
 
 void setup() {
@@ -572,16 +686,19 @@ void setup() {
   pinMode(ULTRA_SONIC_ECHO_PIN, INPUT);
   pinMode(LEFT_MOTOR, OUTPUT);
   pinMode(LEFT_MOTOR_PWM, OUTPUT);
+  pinMode(LEFT_MICRO_SWITCH, INPUT_PULLUP); // Enable the internal pull-up resistor
+  pinMode(RIGHT_MICRO_SWITCH, INPUT_PULLUP); // Enable the internal pull-up resistor
   pinMode(RIGHT_MOTOR, OUTPUT);
   pinMode(RIGHT_MOTOR_PWM, OUTPUT);
-  myservo.attach(ULTRA_SONIC_SERVO);  // Attach the servo at startup
-  myservo.write(90); // Center position
+  UltraSonicServo.attach(ULTRA_SONIC_SERVO);  // Attach the servo at startup
+  UltraSonicServo.write(90); // Center position
   delay(SETTLING_DELAY);
   Serial.begin(9600);
   printMessageF(F("Snoop Dog"));
   mainTimer = StensTimer::getInstance(); // the order of these next three instructions is important, set the static callback before setting timer intervals
   mainTimer->setStaticCallback(programCallback);
   programOne(100,200,2000);
+  setupLaserSensor();
 					// transfer internal memory to the display
 }
 
