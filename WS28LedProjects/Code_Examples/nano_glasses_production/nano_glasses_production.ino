@@ -616,7 +616,7 @@ void setup() {
     u8g2.begin();
     DEBUG_PRINT_INFO(F("Updating Display"));
     updateDisplay();
-        DEBUG_PRINT_INFO(F("Initialised Buttons"));
+    DEBUG_PRINT_INFO(F("Initialised Buttons"));
     button2.begin(SW2_PIN);
     button2.setTapHandler(handleTapSW2);
 }
