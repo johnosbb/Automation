@@ -43,7 +43,7 @@
 
 
 
-
+  
 //#define ENABLE_WS_2828_8
 
 
@@ -509,6 +509,10 @@ void setup_wifi()
 
 void setup(void) {
   char  ip[16];
+
+  
+  // configure LEDC PWM
+  ledcAttachChannel(enable1Pin, freq, resolution, pwmChannel);
   #ifdef ENABLE_WS_2828_8
   led_setup();
   #endif
