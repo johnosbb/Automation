@@ -17,6 +17,7 @@ with help from Cicicok */
 #include <esp_system.h> // For esp_read_mac
 #include "HX1838Decoder.h"
 #include <NewPing.h>
+#include <ArduinoJson.h>
 
 
 
@@ -119,6 +120,7 @@ unsigned long stopStartTime = 0;  // Time when STOP state starts
 int stopCount = 0;                // Counts consecutive stops
 const unsigned long stuckThreshold = 3000;  // 3 seconds threshold to detect stuck
 const int maxStopAttempts = 3;  // Maximum stop occurrences before drastic action
+int recoveryAttempts = 0;  // Keeps track of recovery attempts
 
 
 // State enumeration
@@ -157,11 +159,11 @@ DisplayItem displayItems[] = {
 
 U8G2_SSD1306_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
-#define PROGRAM_ONE 1
-#define PROGRAM_TWO 2
-#define PROGRAM_THREE 3
-#define PROGRAM_FOUR 4
-#define PROGRAM_IDLE 0
+#define ERROR 1
+#define RECONNECTING 3
+#define RECEIVING 4
+#define CONNECTED 5
+#define NORMAL 0
 
 #define MOVING_FORWARD 0
 #define MOVING_REVERSE 1
@@ -169,7 +171,7 @@ U8G2_SSD1306_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
 #define TEST_DELAY 4000
 
-unsigned int active_program = PROGRAM_IDLE;
+unsigned int running_state = NORMAL;
 unsigned int motor_status = STOPPING;
 uint32_t chipId = 0;
 unsigned int driving_speed = DEFAULT_DUTY_CYCLE;
@@ -212,23 +214,26 @@ void printContent(const DisplayItem items[], int itemCount) {
   } while (u8g2.nextPage());
 }
 
-void updateProgram()
+void updateProgram() 
 {
-    switch(active_program) {
+    switch(running_state) {
         case 0:
-            strcpy(gContent2,"Idle");
+            strcpy(gContent2,"Normal");
             break;
         case 1: 
-            strcpy(gContent2,"One");
+            strcpy(gContent2,"Error");
             break;
         case 2: 
-            strcpy(gContent2,"Two");
+            strcpy(gContent2,"Recovering");
             break;
         case 3: 
-            strcpy(gContent2,"Three");
+            strcpy(gContent2,"Reconnecting");
             break;
         case 4: 
-            strcpy(gContent2,"Four");
+            strcpy(gContent2,"Receiving");
+            break;
+        case 5: 
+            strcpy(gContent2,"Connected");
             break;
         default:
             strcpy(gContent2,"Error");
@@ -286,9 +291,9 @@ int processHCSR04()
 
   delay(50);                    // Wait 50ms between pings (about 20 pings/sec). 29ms should be the shortest delay between pings.
   int distance = sonar.ping_cm(); // Send ping, get distance in cm and print result (0 = outside set distance range)
-  Serial.print("Distance: ");
+  Serial.print(F("Distance: "));
   Serial.print(distance);
-  Serial.println("cm");
+  Serial.println(F("cm"));
   return distance;
 }
 
@@ -439,8 +444,12 @@ void testMotor() {
 
 #endif
 
-void stateMachine(unsigned int code,unsigned int distance, unsigned int reason)
+void stateMachine(unsigned int code,int distance, Reason reason)
 {
+    Serial.print(F("State Machine Recieved Distance: "));
+    Serial.println(distance);
+    Serial.print(F("State Machine Recieved Reason: "));
+    Serial.println(reason);
     // Handle state transitions based on the received code
     switch (code) {
       case FORWARD:
@@ -486,7 +495,7 @@ void stateMachine(unsigned int code,unsigned int distance, unsigned int reason)
         break;
     }
   
-  showKey(code);
+  //showKey(code);
   // Execute the current state
   switch (currentState) {
     case STATE_FORWARD:
@@ -518,7 +527,7 @@ void stateMachine(unsigned int code,unsigned int distance, unsigned int reason)
 }
 
 void showKey(unsigned int decodedValue) {
-    Serial.print("Key Pressed: ");
+    Serial.print(F("Key Pressed: "));
     switch (decodedValue) {
         case 0xFF6897: Serial.println("Key 1"); break;
         case 0xFF9867: Serial.println("Key 2"); break;
@@ -538,7 +547,7 @@ void showKey(unsigned int decodedValue) {
 
 void checkIRDecoder() {
     if (irDecoder.available()) {
-        Serial.print("Decoded NEC Data: 0x");
+        Serial.print(F("Decoded NEC Data: 0x"));
         Serial.print(irDecoder.getDecodedData(), HEX);
         // 0xFF6897 Key 1
         // 0xFF9867 Key 2
@@ -551,9 +560,9 @@ void checkIRDecoder() {
         // 0xFFA857 Backward
         // 0xFF02FD Stop
         if (irDecoder.isRepeatSignal()) {
-            Serial.println(" (REPEATED)");
+            Serial.println(F(" (REPEATED)"));
         } else {
-            Serial.println(" (NEW PRESS)");
+            Serial.println(F(" (NEW PRESS)"));
         }
     }
 }
@@ -589,21 +598,26 @@ void setup() {
 
 
 void reconnectToServer() {
-  Serial.print("Connecting to server at ");
+  Serial.print(F("Connecting to server at "));
   Serial.print(serverIP);
   Serial.print(":");
   Serial.println(serverPort);
-
+  running_state = RECONNECTING;
+  updateProgram();
   if (client.connect(serverIP, serverPort)) {
-      Serial.println("Connected to server!");
+      Serial.println(F("Connected to server!"));
+      running_state = CONNECTED;
+      updateProgram();
   } else {
-      Serial.println("Connection failed.");
+      Serial.println(F("Connection failed."));
+      running_state = ERROR;
+      updateProgram();
       delay(1000);
   }
 
 }
 
-void processLogs(unsigned int state,unsigned int distance,unsigned int reason)
+void processLogs(unsigned int state, unsigned int distance, unsigned int reason)
 {
     if (!client.connected()) {
         reconnectToServer();
@@ -612,13 +626,117 @@ void processLogs(unsigned int state,unsigned int distance,unsigned int reason)
     unsigned long currentMillis = millis();
     if (currentMillis - lastLogTime >= logInterval) {
         lastLogTime = currentMillis;
-        String logMessage = "Time: " + String(millis()) + " ms, Distance: " + String(distance) + " cm, State: " + state + ", Reason: " + reason + "\n";
-        Serial.print("Sending: ");
+        // Create a JSON object
+        StaticJsonDocument<200> jsonDoc;
+        jsonDoc["time"] = millis();
+        jsonDoc["distance"] = distance;
+        jsonDoc["state"] = state;
+        jsonDoc["reason"] = reason;
+
+        // Convert JSON to string
+        String logMessage;
+        serializeJson(jsonDoc, logMessage);
+
+        Serial.print(F("Sending: "));
         Serial.println(logMessage);
 
-        client.print(logMessage);
+        const int maxRetries = 3;  // Retry sending up to 3 times
+        int retries = 0;
+        bool success = false;
+        
+        while (retries < maxRetries) {
+            size_t bytesWritten = client.write((const uint8_t*)logMessage.c_str(), logMessage.length());
+
+            if (bytesWritten == logMessage.length()) {
+                success = true;
+                break;  // Exit loop if successful
+            } else {
+                Serial.println(F("Failed to send log message, retrying..."));
+                retries++;
+                delay(100);  // Small delay before retrying
+            }
+        }
+
+        if (!success) {
+            Serial.println(F("Error: Failed to send log message after multiple attempts."));
+            running_state = ERROR;
+            updateProgram();
+            client.stop();  // Reset connection to avoid being stuck
+            reconnectToServer();
+        }
     }
 }
+
+
+void process_navigation_information(unsigned int distance)
+{
+    if (irDecoder.available()) {
+        unsigned int decodedData = irDecoder.getDecodedData();
+        Serial.print(F("Decoded NEC Data: 0x"));
+        Serial.print(decodedData, HEX);
+        stateMachine(decodedData, distance, IR_CONTROL);
+        running_state = RECEIVING;
+        updateProgram();
+    }
+
+    if (distance == 0) {
+        // Target is out of range, keep moving forward
+        Serial.print(F("Out of Range: "));
+        Serial.println(distance);
+        stateMachine(FORWARD, distance, OUT_OF_RANGE);
+    } 
+    else if ((distance < OBSTACLE_STOP_THRESHOLD) && (distance > OBSTACLE_SLOW_THRESHOLD)) {
+        // Randomly turn left or right if distance is between 20 and 30
+        int randomTurn = random(0, 2);  // Generates either 0 or 1
+        if (randomTurn == 0) {
+            stateMachine(LEFT, distance, UNCERTAIN);
+        } else {
+            stateMachine(RIGHT, distance, UNCERTAIN);
+        }
+        stopCount = 0; // Reset stop counter when moving
+    }
+    else if (distance < OBSTACLE_STOP_THRESHOLD) {
+        // If the car stops, track how long it's been stuck
+        if (stopStartTime == 0) {
+            stopStartTime = millis();  // Start tracking time when first stopping
+        }
+
+        stateMachine(STOP, distance, BLOCKED);
+        stopCount++;
+
+        // If stuck for too long or stopped too many times, try recovery
+        if ((millis() - stopStartTime > stuckThreshold) || stopCount >= maxStopAttempts) {
+            stopCount = 0;
+            stopStartTime = 0;
+
+            int turnTime = 500 + (recoveryAttempts * 200);  // Increase turn duration gradually
+            int reverseTime = 1000 + (recoveryAttempts * 300); // Increase reverse time
+
+            // Alternate left/right to avoid looping
+            if (recoveryAttempts % 2 == 0) {
+                stateMachine(REVERSE, distance, RECOVERING);
+                delay(reverseTime);
+                stateMachine(LEFT, distance, RECOVERING);
+                delay(turnTime);
+            } else {
+                stateMachine(REVERSE, distance, RECOVERING);
+                delay(reverseTime);
+                stateMachine(RIGHT, distance, RECOVERING);
+                delay(turnTime);
+            }
+
+            recoveryAttempts++;  // Increase attempts for next time
+            if (recoveryAttempts > 3) recoveryAttempts = 0;  // Reset if too many tries
+        }
+    }
+    else {
+        // Continue moving forward if distance is greater than or equal to 30
+        stateMachine(FORWARD, distance, CLEAR_PATH);
+        stopCount = 0; // Reset stop counter when moving
+        stopStartTime = 0; // Reset stuck timer
+    }
+}
+
 
 void loop() {
   unsigned int sw1 = digitalRead(SW1);  // Read the input state
@@ -632,7 +750,7 @@ void loop() {
   {
     // moveBackward(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED, HIGHER_SPEED);
     // moveBackward(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED, HIGHER_SPEED);
-    Serial.println("SW1 Switch ....");
+    Serial.println(F("SW1 Switch ...."));
     distance = processHCSR04();
 
   }
@@ -644,64 +762,7 @@ void loop() {
   }
   #endif
   distance = processHCSR04();
-  if (irDecoder.available()) {
-        unsigned int decodedData = irDecoder.getDecodedData();
-        Serial.print("Decoded NEC Data: 0x");
-        Serial.print(decodedData, HEX);
-        stateMachine(decodedData,distance,IR_CONTROL);
-      }
-
-    if (distance == 0) {
-      // Target is out of range, keep moving forward
-      stateMachine(FORWARD,distance,OUT_OF_RANGE);  // Replace FORWARD with the appropriate command to move forward
-    } 
-    else if ((distance < OBSTACLE_STOP_THRESHOLD) && (distance > OBSTACLE_SLOW_THRESHOLD)) {
-      // Randomly turn left or right if distance is between 20 and 30
-      int randomTurn = random(0, 2);  // Generates either 0 or 1
-      if (randomTurn == 0) {
-        stateMachine(LEFT,distance,UNCERTAIN);
-      } else {
-        stateMachine(RIGHT,distance,UNCERTAIN);
-      }
-      stopCount = 0; // Reset stop counter when moving
-    }
-
-    else if (distance < OBSTACLE_STOP_THRESHOLD) {
-      // If the car stops, track how long it's been stuck
-      if (stopStartTime == 0) {
-        stopStartTime = millis();  // Start tracking time when first stopping
-      }
-      
-      stateMachine(STOP,distance,BLOCKED);
-      stopCount++;
-
-      // If stuck for too long or stopped too many times, try recovery
-      if ((millis() - stopStartTime > stuckThreshold) || stopCount >= maxStopAttempts) {
-        stopCount = 0; // Reset stop count
-        stopStartTime = 0; // Reset timer
-
-        // Try a recovery move
-        int recoveryMove = random(0, 2); // Randomly pick a strategy
-        if (recoveryMove == 0) {
-          stateMachine(REVERSE,distance,RECOVERING);
-          delay(1000);  // Move back for a second
-          stateMachine(LEFT,distance,RECOVERING);
-          delay(500);   // Turn left
-        } else {
-          stateMachine(REVERSE,distance,RECOVERING);
-          delay(1000);
-          stateMachine(RIGHT,distance,RECOVERING);
-          delay(500);
-        }
-      }
-    }
-
-    else {
-      // Continue moving forward if distance is greater than or equal to 30
-      stateMachine(FORWARD,distance,CLEAR_PATH);
-      stopCount = 0; // Reset stop counter when moving
-      stopStartTime = 0; // Reset stuck timer
-    }
+  process_navigation_information(distance);
     //checkIRDecoder();
     //delay(1000);
   // Serial.println("Main Loop .....");
