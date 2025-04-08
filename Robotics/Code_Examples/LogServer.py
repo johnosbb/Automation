@@ -49,37 +49,50 @@ def start_server():
         print(f"Server listening on {HOST}:{PORT}")
 
         while True:
-            client_socket, client_address = server_socket.accept()
-            print(f"Connected by {client_address}")
+            try:
+                client_socket, client_address = server_socket.accept()
+                print(f"Connected by {client_address}")
 
-            with client_socket, open("car_log.txt", "a") as log_file:
-                while True:
-                    data = client_socket.recv(1024)
-                    if not data:
-                        break
-                    
-                    log_message = data.decode("utf-8").strip()
+                with client_socket:
+                    client_socket.settimeout(10)  # Timeout for receiving data
+                    with open("car_log.txt", "a") as log_file:
+                        while True:
+                            try:
+                                data = client_socket.recv(1024)
+                                if not data:
+                                    print("Client disconnected.")
+                                    break
 
-                    # Decode JSON message
-                    try:
-                        log_data = json.loads(log_message)
-                        time_ms = log_data["time"]
-                        distance_cm = log_data["distance"]
-                        state_raw = log_data["state"]
-                        reason_raw = log_data["reason"]
-                        rpm = log_data["rpm"]
+                                log_message = data.decode("utf-8").strip()
 
-                        # Decode state and reason
-                        state_decoded = decode_state(state_raw)
-                        reason_decoded = decode_reason(reason_raw)
+                                try:
+                                    log_data = json.loads(log_message)
+                                    time_ms = log_data["time"]
+                                    distance_cm = log_data["distance"]
+                                    state_raw = log_data["state"]
+                                    reason_raw = log_data["reason"]
+                                    rpm = log_data["rpm"]
 
-                        # Format the log message
-                        formatted_message = f"Time: {time_ms} ms, Distance: {distance_cm} cm, State: {state_decoded}, Reason: {reason_decoded}, RPM: {rpm}"
-                    except json.JSONDecodeError:
-                        formatted_message = f"Malformed JSON received: {log_message}"
+                                    state_decoded = decode_state(state_raw)
+                                    reason_decoded = decode_reason(reason_raw)
 
-                    print(formatted_message)
-                    log_file.write(formatted_message + "\n")
+                                    formatted_message = f"Time: {time_ms} ms, Distance: {distance_cm} cm, State: {state_decoded}, Reason: {reason_decoded}, RPM: {rpm}"
+                                except json.JSONDecodeError:
+                                    formatted_message = f"Malformed JSON received: {log_message}"
+
+                                print(formatted_message)
+                                log_file.write(formatted_message + "\n")
+
+                            except socket.timeout:
+                                print("Client connection timed out.")
+                                break
+                            except ConnectionResetError:
+                                print("Connection reset by peer.")
+                                break
+
+            except Exception as e:
+                print(f"Error handling connection: {e}")
+
 
 
 if __name__ == "__main__":
