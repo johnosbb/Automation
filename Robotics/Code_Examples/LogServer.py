@@ -67,13 +67,14 @@ def start_server():
                         distance_cm = log_data["distance"]
                         state_raw = log_data["state"]
                         reason_raw = log_data["reason"]
+                        rpm = log_data["rpm"]
 
                         # Decode state and reason
                         state_decoded = decode_state(state_raw)
                         reason_decoded = decode_reason(reason_raw)
 
                         # Format the log message
-                        formatted_message = f"Time: {time_ms} ms, Distance: {distance_cm} cm, State: {state_decoded}, Reason: {reason_decoded}"
+                        formatted_message = f"Time: {time_ms} ms, Distance: {distance_cm} cm, State: {state_decoded}, Reason: {reason_decoded}, RPM: {rpm}"
                     except json.JSONDecodeError:
                         formatted_message = f"Malformed JSON received: {log_message}"
 
