@@ -20,6 +20,12 @@ with help from Cicicok */
 #include <ArduinoJson.h>
 
 
+#include <Adafruit_MCP23X17.h>
+
+#define BUTTON_PIN 1   // MCP23XXX pin used for interrupt
+
+#define INT_PIN 32      // microcontroller pin attached to INTA/B
+
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -49,7 +55,9 @@ with help from Cicicok */
 // Infrared Receiver
 #define IR_RECEIVE_PIN 4 // GPIO4
 
+// HC-020K  Encoder Pin Output
 
+#define ENCODER_PIN 39 // GPIO39
 
 
 // Setting PWM properties
@@ -66,6 +74,9 @@ with help from Cicicok */
 #define HC_SR04_ECHO_PIN 36 // GPIO36
 #define HC_SR04_TRIGGER_PIN 16 // GPIO16
 NewPing sonar(HC_SR04_TRIGGER_PIN, HC_SR04_ECHO_PIN, MAX_DISTANCE); // NewPing setup of pins and maximum distance.
+
+
+#define ERROR_LED_PIN 17 // GPIO17
 
 // Define the structure for the content
 typedef struct {
@@ -91,7 +102,7 @@ char gContent3[25] = "";
 
 
 IRDecoder irDecoder(IR_RECEIVE_PIN);  // IR Receiver on IR_RECEIVE_PIN
-
+Adafruit_MCP23X17 mcp;
 
 // Define IR codes
 const unsigned long KEY_1 = 0xFF6897;
@@ -122,6 +133,14 @@ const unsigned long stuckThreshold = 3000;  // 3 seconds threshold to detect stu
 const int maxStopAttempts = 3;  // Maximum stop occurrences before drastic action
 int recoveryAttempts = 0;  // Keeps track of recovery attempts
 
+
+// Rotary Encoder
+
+
+unsigned int rpm;
+volatile byte pulses;
+unsigned long encoder_previous_time;
+unsigned int pulses_per_turn= 20; // Depends on the number of spokes on the encoder wheel
 
 // State enumeration
 enum State {
@@ -175,6 +194,13 @@ unsigned int running_state = NORMAL;
 unsigned int motor_status = STOPPING;
 uint32_t chipId = 0;
 unsigned int driving_speed = DEFAULT_DUTY_CYCLE;
+
+
+void count() // Counting the number of pulses for calculation of rpm
+{
+  pulses++;  
+}
+
 
 
 void u8g2_prepare(void) {
@@ -268,6 +294,51 @@ void updateMotorStatus()
     printContent(displayItems, sizeof(displayItems) / sizeof(displayItems[0]));
 }
 
+
+
+void setupMCP() {
+  Serial.println("MCP23xxx Configuration!");
+
+  if (!mcp.begin_I2C()) {
+    Serial.println("Error.");
+    while (1);
+  }
+
+
+  pinMode(INT_PIN, INPUT);
+
+  // Register       	Description
+  // DEFVAL	          Bitmask: expected/default value on pin
+  // INTCON	          Bitmask: compare to DEFVAL or last pin
+  // GPINTEN	        Bitmask: enable interrupts on pins
+
+  // Mirror INTA and INTB, use active-low, open-drain
+  mcp.setupInterrupts(true, false, LOW);
+  // You can use the Adafruit_MCP23X17::write8() method to write directly to any register by address.
+  // // Enable interrupts on GPA0–GPA7
+  // mcp.write8(0x04, 0xFF);  // GPINTENA – enable interrupt on all GPA pins
+
+  // // Set DEFVALA to 0xFF = expect HIGH
+  // mcp.write8(0x06, 0xFF);  // DEFVALA – expected values (HIGH)
+
+  // // Set INTCONA to compare to DEFVALA (not previous state)
+  // mcp.write8(0x08, 0xFF);  // INTCONA – compare to DEFVAL instead of last state
+  // Configure pins 0 to 7 as inputs with pull-ups and enable interrupt
+  for (uint8_t i = 0; i <= 7; i++) {
+    mcp.pinMode(i, INPUT_PULLUP);
+    mcp.setupInterruptPin(i, CHANGE);  // interrupt when pulled LOW
+  }
+
+}
+
+
+void setupRotaryEncoder() {
+  rpm=0;
+  pulses=0;
+  encoder_previous_time=0;
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), count, FALLING ); // Triggering count function everytime the encoder pin1 turns from 1 to 0
+ 
+}
 
 void setupWifi()
 {
@@ -572,13 +643,18 @@ void setup() {
   pinMode(SW2, INPUT);  // Configure GPIO34 as an input
   pinMode(HC_SR04_ECHO_PIN, INPUT);
   pinMode(HC_SR04_TRIGGER_PIN, OUTPUT);
-
+  pinMode(ERROR_LED_PIN, OUTPUT);
+  pinMode(ENCODER_PIN, INPUT_PULLUP);
+  
+  digitalWrite(ERROR_LED_PIN, HIGH); // Turn on initially
   Serial.begin(115200);
   // Set WiFi to station mode and disconnect from an AP if it was previously connected
   WiFi.disconnect();
   #ifdef ENABLE_MOTOR_CONTROL
   setupMotorControl();
   #endif
+  setupRotaryEncoder();
+  setupMCP();
   irDecoder.begin();
   DEBUG_PRINT_INFO(F("Setting up OLED Display"));
   u8g2_prepare();
@@ -594,11 +670,13 @@ void setup() {
       delay(500);
       DEBUG_PRINT_INFO(F("."));
   }
+  digitalWrite(ERROR_LED_PIN, LOW); // Turn off after connecting
 }
 
 
 void reconnectToServer() {
   Serial.print(F("Connecting to server at "));
+  digitalWrite(ERROR_LED_PIN, HIGH); // Turn on when reconnecting
   Serial.print(serverIP);
   Serial.print(":");
   Serial.println(serverPort);
@@ -607,11 +685,13 @@ void reconnectToServer() {
   if (client.connect(serverIP, serverPort)) {
       Serial.println(F("Connected to server!"));
       running_state = CONNECTED;
+      digitalWrite(ERROR_LED_PIN, LOW); // Turn off when connected
       updateProgram();
   } else {
       Serial.println(F("Connection failed."));
       running_state = ERROR;
       updateProgram();
+      digitalWrite(ERROR_LED_PIN, HIGH); // Turn on when error occurs
       delay(1000);
   }
 
@@ -632,6 +712,7 @@ void processLogs(unsigned int state, unsigned int distance, unsigned int reason)
         jsonDoc["distance"] = distance;
         jsonDoc["state"] = state;
         jsonDoc["reason"] = reason;
+        jsonDoc["rpm"] = rpm;
 
         // Convert JSON to string
         String logMessage;
@@ -660,6 +741,7 @@ void processLogs(unsigned int state, unsigned int distance, unsigned int reason)
         if (!success) {
             Serial.println(F("Error: Failed to send log message after multiple attempts."));
             running_state = ERROR;
+            digitalWrite(ERROR_LED_PIN, HIGH); // Turn on when error occurs
             updateProgram();
             client.stop();  // Reset connection to avoid being stuck
             reconnectToServer();
@@ -738,9 +820,40 @@ void process_navigation_information(unsigned int distance)
 }
 
 
+void processEncoder()
+{
+  if(millis()-encoder_previous_time >=100)
+  { // Updating every 0.1 seconds
+    detachInterrupt(digitalPinToInterrupt(ENCODER_PIN));
+    rpm = (60 * 100 / pulses_per_turn )/ (millis() - encoder_previous_time)* pulses;
+    encoder_previous_time=millis();
+    pulses=0;
+    Serial.print("RPM= ");
+    Serial.println(rpm);
+    attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), count, FALLING ); // Triggering count function everytime the encoder pin1 turns from 1 to 0  
+  }
+}
+
+void ProcessMCP()
+{
+  if (!digitalRead(INT_PIN))
+  {
+    Serial.print("Interrupt detected on pin: ");
+    Serial.println(mcp.getLastInterruptPin());
+    Serial.print("Pin states at time of interrupt: 0b");
+    Serial.println(mcp.getCapturedInterrupt(), 2);
+    // delay(250);  // debounce
+    // // NOTE: If using DEFVAL, INT clears only if interrupt
+    // // condition does not exist.
+    // // See Fig 1-7 in datasheet.
+    mcp.clearInterrupts();  // clear
+  }
+}
+
 void loop() {
   unsigned int sw1 = digitalRead(SW1);  // Read the input state
   unsigned int distance;
+  int pinState = digitalRead(ENCODER_PIN); // Get current logic level
   // DEBUG_PRINTLN(sw1);               // Print the value to Serial Monitor
   unsigned int sw2 = digitalRead(SW2);  // Read the input state
   // DEBUG_PRINTLN(sw2);               // Print the value to Serial Monitor
@@ -758,11 +871,17 @@ void loop() {
   {
     // stopMotor(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED);
     // stopMotor(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED);
-    distance = processHCSR04();
+    digitalWrite(ERROR_LED_PIN, LOW);
   }
   #endif
   distance = processHCSR04();
   process_navigation_information(distance);
+  processEncoder();
+      
+
+  Serial.print("Encoder Pin State: ");
+  Serial.println(pinState); // Will be 0 (LOW) or 1 (HIGH)
+  ProcessMCP();
     //checkIRDecoder();
     //delay(1000);
   // Serial.println("Main Loop .....");
