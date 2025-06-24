@@ -11,7 +11,7 @@
 #define LONG_TAP 500
 
 // Set the desired debug level here
-#define DEBUG_LEVEL DEBUG_LEVEL_DEBUG
+#define DEBUG_LEVEL DEBUG_LEVEL_INFO
 
 #ifdef DEBUG_SERIAL
   // Error

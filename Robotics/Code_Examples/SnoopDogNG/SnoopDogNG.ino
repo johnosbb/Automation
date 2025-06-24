@@ -1,14 +1,4 @@
-/* The true ESP32 chip ID is essentially its MAC address.
-This sketch provides an alternate chip ID that matches
-the output of the ESP.getChipId() function on ESP8266
-(i.e. a 32-bit integer matching the last 3 bytes of
-the MAC address. This is less unique than the
-MAC address chip ID, but is helpful when you need
-an identifier that can be no more than a 32-bit integer
-(like for switch...case).
 
-created 2020-06-07 by cweinhofer
-with help from Cicicok */
 
 #include <U8g2lib.h>
 #include <debug.h>
@@ -19,13 +9,11 @@ with help from Cicicok */
 #include <NewPing.h>
 #include <ArduinoJson.h>
 
-
 #include <Adafruit_MCP23X17.h>
 
 #define BUTTON_PIN 1   // MCP23XXX pin used for interrupt
 
 #define INT_PIN 32      // microcontroller pin attached to INTA/B
-
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -36,6 +24,14 @@ with help from Cicicok */
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
+
+
+// LEDs
+
+#define STATUS_LED 4 // GPB pin 4 is connected to a blue status Led
+#define MODE_LED 3   // GPB pin 3 is connected to a yellow mode Led
+
+
 
 
 // Motor Control
@@ -51,14 +47,10 @@ with help from Cicicok */
 #define SW1 34  // GPIO34
 #define SW2 35  // GPIO35
 
-
 // Infrared Receiver
 #define IR_RECEIVE_PIN 4 // GPIO4
-
 // HC-020K  Encoder Pin Output
-
 #define ENCODER_PIN 39 // GPIO39
-
 
 // Setting PWM properties
 #define FREQUENCY 30000
@@ -70,11 +62,14 @@ with help from Cicicok */
 #define HIGHER_SPEED  255  // Speed for the right motors (higher speed)
 
 // HC‐SR04 Ultra Sonic Sensor
+#define ENABLE_HC_SR04
 #define MAX_DISTANCE 400 // Maximum distance we want to measure (in centimeters).
 #define HC_SR04_ECHO_PIN 36 // GPIO36
 #define HC_SR04_TRIGGER_PIN 16 // GPIO16
-NewPing sonar(HC_SR04_TRIGGER_PIN, HC_SR04_ECHO_PIN, MAX_DISTANCE); // NewPing setup of pins and maximum distance.
 
+#ifdef ENABLE_HC_SR04
+NewPing sonar(HC_SR04_TRIGGER_PIN, HC_SR04_ECHO_PIN, MAX_DISTANCE); // NewPing setup of pins and maximum distance.
+#endif
 
 #define ERROR_LED_PIN 17 // GPIO17
 
@@ -99,12 +94,15 @@ char gContent1[25] = "Program: ";
 char gContent2[25] = "No Program";
 char gContent3[25] = "";
 
+IRDecoder irDecoder(IR_RECEIVE_PIN);  // IR Receiver on IR_RECEIVE_PIN Remote Control
 
-
-IRDecoder irDecoder(IR_RECEIVE_PIN);  // IR Receiver on IR_RECEIVE_PIN
+#define MCP23017
+#ifdef MCP23017
 Adafruit_MCP23X17 mcp;
+#endif
 
 // Define IR codes
+const unsigned long KEY_0 = 0xFF4AB5; 
 const unsigned long KEY_1 = 0xFF6897;
 const unsigned long KEY_2 = 0xFF9867;
 const unsigned long KEY_3 = 0xFFB04F;
@@ -116,8 +114,12 @@ const unsigned long FORWARD = 0xFF629D;
 const unsigned long LEFT = 0xFF22DD;
 const unsigned long RIGHT = 0xFFC23D;
 const unsigned long REVERSE = 0xFFA857;
-const unsigned long STOP = 0xFF02FD;
+const unsigned long STOP = 0xFF02FD; // OK key on Lafvin keyboard
+const unsigned long ASTERISK = 0xFF42BD; // 
+const unsigned long HASH = 0xFF52AD; // 
 
+// Add a global variable to help with debouncing SW2 (or any button)
+bool lastSw2State = false;
 
 WiFiClient client;
 const char* serverIP = "192.168.1.191"; // Replace with your server's IP address
@@ -132,11 +134,9 @@ int stopCount = 0;                // Counts consecutive stops
 const unsigned long stuckThreshold = 3000;  // 3 seconds threshold to detect stuck
 const int maxStopAttempts = 3;  // Maximum stop occurrences before drastic action
 int recoveryAttempts = 0;  // Keeps track of recovery attempts
-
+unsigned int enableNavigation = 1;
 
 // Rotary Encoder
-
-
 unsigned int rpm;
 volatile byte pulses;
 unsigned long encoder_previous_time;
@@ -153,19 +153,27 @@ enum State {
 };
 
 
-// Reasoning enumeration
-enum Reason {
+// Reasoninging enumeration
+enum Reasoning {
   IR_CONTROL,
   CLEAR_PATH,
   OUT_OF_RANGE,
   BLOCKED,
   RECOVERING,
-  UNCERTAIN
+  UNCERTAIN,
+  CRASH_DETECT
 };
 
 
 #define OBSTACLE_STOP_THRESHOLD 30
 #define OBSTACLE_SLOW_THRESHOLD 40
+
+volatile bool interruptOccurred = false; // Flag to indicate interrupt
+
+void IRAM_ATTR handleInterrupt() {
+  interruptOccurred = true; // Set the interrupt flag
+}
+
 
 // Current state
 State currentState = STATE_IDLE;
@@ -183,6 +191,7 @@ U8G2_SSD1306_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 #define RECEIVING 4
 #define CONNECTED 5
 #define NORMAL 0
+#define MANUAL 6
 
 #define MOVING_FORWARD 0
 #define MOVING_REVERSE 1
@@ -201,7 +210,55 @@ void count() // Counting the number of pulses for calculation of rpm
   pulses++;  
 }
 
+/**
+ * @brief Turns on a selected LED connected to the MCP23017.
+ *
+ * @param ledPin The GPB pin number (0-15) corresponding to the LED.
+ * Use defined constants like STATUS_LED (blue) or MODE_LED (yellow).
+ */
+void turnOnLed(uint8_t ledPin) {
+  ledPin = ledPin + 8; // Convert GPB pin (0-7) to MCP pin (8-15)
+  // Turn on the LED (assuming active-high for the LED)
+  mcp.digitalWrite(ledPin, HIGH);
+  switch (ledPin) {
+    case STATUS_LED:
+      DEBUG_PRINTLN(F("Blue Status LED ON"));
+      break;
+    case MODE_LED:
+      DEBUG_PRINTLN(F("Yellow Mode LED ON"));
+      break;
+    default:
+      DEBUG_PRINT(F("LED on pin "));
+      DEBUG_PRINT(ledPin);
+      DEBUG_PRINTLN(F(" ON"));
+      break;
+  }
+}
 
+/**
+ * @brief Turns off a selected LED connected to the MCP23017.
+ *
+ * @param ledPin The GPB pin number (0-15) corresponding to the LED.
+ * Use defined constants like STATUS_LED (blue) or MODE_LED (yellow).
+ */
+void turnOffLed(uint8_t ledPin) {
+  ledPin = ledPin + 8; // Convert GPB pin (0-7) to MCP pin (8-15)
+  // Turn off the LED (assuming active-high for the LED)
+  mcp.digitalWrite(ledPin, LOW);
+  switch (ledPin) {
+    case STATUS_LED:
+      DEBUG_PRINTLN(F("Blue Status LED OFF"));
+      break;
+    case MODE_LED:
+      DEBUG_PRINTLN(F("Yellow Mode LED OFF"));
+      break;
+    default:
+      DEBUG_PRINT(F("LED on pin "));
+      DEBUG_PRINT(ledPin);
+      DEBUG_PRINTLN(F(" OFF"));
+      break;
+  }
+}
 
 void u8g2_prepare(void) {
   u8g2.setFont(u8g2_font_7x14_tf);
@@ -261,6 +318,9 @@ void updateProgram()
         case 5: 
             strcpy(gContent2,"Connected");
             break;
+        case 6: 
+            strcpy(gContent2,"Manual");
+            break;
         default:
             strcpy(gContent2,"Error");
             break; 
@@ -295,49 +355,38 @@ void updateMotorStatus()
 }
 
 
-
+#ifdef MCP23017
 void setupMCP() {
   Serial.println("MCP23xxx Configuration!");
-
   if (!mcp.begin_I2C()) {
     Serial.println("Error.");
     while (1);
   }
-
-
-  pinMode(INT_PIN, INPUT);
-
-  // Register       	Description
-  // DEFVAL	          Bitmask: expected/default value on pin
-  // INTCON	          Bitmask: compare to DEFVAL or last pin
-  // GPINTEN	        Bitmask: enable interrupts on pins
-
+  pinMode(INT_PIN, INPUT_PULLUP); // Important for interrupt triggering
   // Mirror INTA and INTB, use active-low, open-drain
   mcp.setupInterrupts(true, false, LOW);
-  // You can use the Adafruit_MCP23X17::write8() method to write directly to any register by address.
-  // // Enable interrupts on GPA0–GPA7
-  // mcp.write8(0x04, 0xFF);  // GPINTENA – enable interrupt on all GPA pins
-
-  // // Set DEFVALA to 0xFF = expect HIGH
-  // mcp.write8(0x06, 0xFF);  // DEFVALA – expected values (HIGH)
-
-  // // Set INTCONA to compare to DEFVALA (not previous state)
-  // mcp.write8(0x08, 0xFF);  // INTCONA – compare to DEFVAL instead of last state
-  // Configure pins 0 to 7 as inputs with pull-ups and enable interrupt
-  for (uint8_t i = 0; i <= 7; i++) {
+  // Configure pins 0 to 1 as inputs with pull-ups and enable interrupt. Only using two pins now.
+  for (uint8_t i = 0; i <= 1; i++) {
     mcp.pinMode(i, INPUT_PULLUP);
-    mcp.setupInterruptPin(i, CHANGE);  // interrupt when pulled LOW
+    mcp.setupInterruptPin(i, CHANGE); // interrupt when pulled LOW
   }
 
-}
+    // Configure GPB pins (8-15) as outputs
+  for (uint8_t i = 8; i <= 15; i++) {
+    mcp.pinMode(i, OUTPUT);
+    mcp.digitalWrite(i, LOW); // Initialize outputs to LOW
+  }
 
+  // Attach interrupt to the ESP32 pin
+  attachInterrupt(digitalPinToInterrupt(INT_PIN), handleInterrupt, FALLING); // Assuming the MCP23X17 pulls INT_PIN LOW
+}
+#endif
 
 void setupRotaryEncoder() {
   rpm=0;
   pulses=0;
   encoder_previous_time=0;
   attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), count, FALLING ); // Triggering count function everytime the encoder pin1 turns from 1 to 0
- 
 }
 
 void setupWifi()
@@ -357,21 +406,21 @@ void setupWifi()
   Serial.println(macAddress);
 }
 
+#ifdef ENABLE_HC_SR04
 int processHCSR04()
 {
-
   delay(50);                    // Wait 50ms between pings (about 20 pings/sec). 29ms should be the shortest delay between pings.
   int distance = sonar.ping_cm(); // Send ping, get distance in cm and print result (0 = outside set distance range)
-  Serial.print(F("Distance: "));
-  Serial.print(distance);
-  Serial.println(F("cm"));
+  DEBUG_PRINT(F("Distance: "));
+  DEBUG_PRINT(distance);
+  DEBUG_PRINTLN(F("cm"));
   return distance;
 }
+#endif
 
 void scanWifiNetworks()
 {
     DEBUG_PRINT_INFO(F("scan start"));
-
     // WiFi.scanNetworks will return the number of networks found
     int n = WiFi.scanNetworks();
     DEBUG_PRINT_INFO(F("scan done"));
@@ -392,9 +441,7 @@ void scanWifiNetworks()
             delay(10);
         }
     }
-
     DEBUG_PRINT_INFO(F(""));
-
     // Wait a bit before scanning again
     delay(5000);
 }
@@ -406,17 +453,12 @@ void scanWifiNetworks()
 #ifdef ENABLE_MOTOR_CONTROL
 void setupMotorControl()
 {
-
   pinMode(MOTOR_LEFT_DIRECTION_1, OUTPUT);
   pinMode(MOTOR_LEFT_DIRECTION_2, OUTPUT);
   pinMode(MOTOR_LEFT_SPEED, OUTPUT);
-
-
-
   pinMode(MOTOR_RIGHT_DIRECTION_1, OUTPUT);
   pinMode(MOTOR_RIGHT_DIRECTION_2, OUTPUT);
   pinMode(MOTOR_RIGHT_SPEED, OUTPUT);
-
     // configure LEDC PWM for the left motor
   ledcAttachChannel(MOTOR_LEFT_SPEED, FREQUENCY, RESOLUTION, PWM_CHANNEL_LEFT);
   ledcAttachChannel(MOTOR_RIGHT_SPEED, FREQUENCY, RESOLUTION, PWM_CHANNEL_RIGHT);
@@ -491,7 +533,6 @@ void testMotor() {
   moveForward(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED, HIGHER_SPEED);
   // moveForward(MotorLeftFrontDirectionPin1, MotorLeftFrontDirectionPin2, MotorLeftFrontSpeedPin, HIGHER_SPEED);
   delay(TEST_DELAY);
-
   // Stop the DC motor
   DEBUG_PRINTLN(F("Motor Stopped"));
   motor_status = STOPPING;
@@ -499,28 +540,22 @@ void testMotor() {
   stopMotor(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED);
   // stopMotor(MotorLeftFrontDirectionPin1, MotorLeftFrontDirectionPin2, MotorLeftFrontSpeedPin);
   delay(TEST_DELAY);
-
-
   moveBackward(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED, REDUCED_SPEED);
   // moveBackward(MotorLeftFrontDirectionPin1, MotorLeftFrontDirectionPin2, MotorLeftFrontSpeedPin, REDUCED_SPEED);
   delay(TEST_DELAY);
-
   // Stop the DC motor
-
   stopMotor(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED);
   // stopMotor(MotorLeftFrontDirectionPin1, MotorLeftFrontDirectionPin2, MotorLeftFrontSpeedPin);
   delay(TEST_DELAY);
   
 }
 
-#endif
 
-void stateMachine(unsigned int code,int distance, Reason reason)
+
+void stateMachine(unsigned int code,int distance, Reasoning reason)
 {
-    Serial.print(F("State Machine Recieved Distance: "));
-    Serial.println(distance);
-    Serial.print(F("State Machine Recieved Reason: "));
-    Serial.println(reason);
+    // Serial.println(distance);
+    // Serial.println(reason);
     // Handle state transitions based on the received code
     switch (code) {
       case FORWARD:
@@ -560,13 +595,21 @@ void stateMachine(unsigned int code,int distance, Reason reason)
       case KEY_7:
         // moveForward(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED, driving_speed);  
         // moveBackward(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED, driving_speed);  
+        break;    
+      case HASH:
+        enableNavigation = 0;
+        stopMotor(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED);
+        stopMotor(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED);
+        Serial.println(F("Disabling Navigation... "));
+        // moveForward(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED, driving_speed);  
+        // moveBackward(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED, driving_speed);  
         break;          
       default:
         // Unknown code, do nothing
         break;
     }
   
-  //showKey(code);
+    
   // Execute the current state
   switch (currentState) {
     case STATE_FORWARD:
@@ -594,12 +637,13 @@ void stateMachine(unsigned int code,int distance, Reason reason)
       // Do nothing
       break;
   }
-  processLogs(currentState, distance,reason);
+  processLogs(currentState, distance,reason,0);
 }
-
+#endif
 void showKey(unsigned int decodedValue) {
     Serial.print(F("Key Pressed: "));
     switch (decodedValue) {
+        case 0xFF4AB5: Serial.println("Key 0"); break;
         case 0xFF6897: Serial.println("Key 1"); break;
         case 0xFF9867: Serial.println("Key 2"); break;
         case 0xFFB04F: Serial.println("Key 3"); break;
@@ -610,6 +654,8 @@ void showKey(unsigned int decodedValue) {
         case 0xFFC23D: Serial.println("Right"); break;
         case 0xFFA857: Serial.println("Backward"); break;
         case 0xFF02FD: Serial.println("Stop"); break;
+        case 0xFF42BD: Serial.println("*"); break;
+        case 0xFF52AD: Serial.println("#"); break;        
         default: Serial.println("Unknown Key");
     }
 }
@@ -618,6 +664,7 @@ void showKey(unsigned int decodedValue) {
 
 void checkIRDecoder() {
     if (irDecoder.available()) {
+        turnOnLed(STATUS_LED);  
         Serial.print(F("Decoded NEC Data: 0x"));
         Serial.print(irDecoder.getDecodedData(), HEX);
         // 0xFF6897 Key 1
@@ -635,6 +682,8 @@ void checkIRDecoder() {
         } else {
             Serial.println(F(" (NEW PRESS)"));
         }
+        delay(100);
+        turnOffLed(STATUS_LED);
     }
 }
 
@@ -650,17 +699,23 @@ void setup() {
   Serial.begin(115200);
   // Set WiFi to station mode and disconnect from an AP if it was previously connected
   WiFi.disconnect();
+  delay(100);
+  Serial.println("Serial initialised!");
+  #if 1
   #ifdef ENABLE_MOTOR_CONTROL
   setupMotorControl();
   #endif
   setupRotaryEncoder();
+  #ifdef MCP23017
   setupMCP();
+  #endif
   irDecoder.begin();
   DEBUG_PRINT_INFO(F("Setting up OLED Display"));
   u8g2_prepare();
   u8g2.begin();
   DEBUG_PRINT_INFO(F("Updating Display"));
   updateProgram();
+  turnOnLed(STATUS_LED);
   setupWifi();
   WiFi.config(device_ip,  gateway_ip, subnet_mask,dns_ip_1,dns_ip_2);
   WiFi.begin(ssid, pass);
@@ -671,6 +726,10 @@ void setup() {
       DEBUG_PRINT_INFO(F("."));
   }
   digitalWrite(ERROR_LED_PIN, LOW); // Turn off after connecting
+
+  DEBUG_PRINT_INFO(F("WiFi connected."));
+  turnOffLed(STATUS_LED);
+  #endif
 }
 
 
@@ -694,17 +753,15 @@ void reconnectToServer() {
       digitalWrite(ERROR_LED_PIN, HIGH); // Turn on when error occurs
       delay(1000);
   }
-
 }
 
-void processLogs(unsigned int state, unsigned int distance, unsigned int reason)
+void processLogs(unsigned int state, unsigned int distance, unsigned int reason, unsigned int priority)
 {
     if (!client.connected()) {
         reconnectToServer();
     }
-
     unsigned long currentMillis = millis();
-    if (currentMillis - lastLogTime >= logInterval) {
+    if ((currentMillis - lastLogTime >= logInterval) || priority) {
         lastLogTime = currentMillis;
         // Create a JSON object
         StaticJsonDocument<200> jsonDoc;
@@ -713,18 +770,14 @@ void processLogs(unsigned int state, unsigned int distance, unsigned int reason)
         jsonDoc["state"] = state;
         jsonDoc["reason"] = reason;
         jsonDoc["rpm"] = rpm;
-
         // Convert JSON to string
         String logMessage;
         serializeJson(jsonDoc, logMessage);
-
         Serial.print(F("Sending: "));
         Serial.println(logMessage);
-
         const int maxRetries = 3;  // Retry sending up to 3 times
         int retries = 0;
         bool success = false;
-        
         while (retries < maxRetries) {
             size_t bytesWritten = client.write((const uint8_t*)logMessage.c_str(), logMessage.length());
 
@@ -737,7 +790,6 @@ void processLogs(unsigned int state, unsigned int distance, unsigned int reason)
                 delay(100);  // Small delay before retrying
             }
         }
-
         if (!success) {
             Serial.println(F("Error: Failed to send log message after multiple attempts."));
             running_state = ERROR;
@@ -749,76 +801,123 @@ void processLogs(unsigned int state, unsigned int distance, unsigned int reason)
     }
 }
 
+#ifdef ENABLE_MOTOR_CONTROL
+void performRecovery(unsigned int distance) {
+    if(enableNavigation)
+    {
+      turnOnLed(MODE_LED);
+      stopCount = 0;
+      stopStartTime = 0;
+      int turnTime = 500 + (recoveryAttempts * 200);  // Increase turn duration gradually
+      int reverseTime = 1000 + (recoveryAttempts * 300); // Increase reverse time
+      // Alternate left/right to avoid looping
+      stateMachine(REVERSE, distance, RECOVERING);
+      delay(reverseTime);
+      
+      if (recoveryAttempts % 2 == 0) {
+          stateMachine(LEFT, distance, RECOVERING);
+      } else {
+          stateMachine(RIGHT, distance, RECOVERING);
+      }
+      delay(turnTime);
+      recoveryAttempts++;
+      if (recoveryAttempts > 3) recoveryAttempts = 0;
+      turnOffLed(MODE_LED);
+  }
+}
+#endif
 
+#ifdef ENABLE_MOTOR_CONTROL
 void process_navigation_information(unsigned int distance)
 {
     if (irDecoder.available()) {
         unsigned int decodedData = irDecoder.getDecodedData();
         Serial.print(F("Decoded NEC Data: 0x"));
+        showKey(decodedData);
         Serial.print(decodedData, HEX);
-        stateMachine(decodedData, distance, IR_CONTROL);
-        running_state = RECEIVING;
-        updateProgram();
-    }
 
-    if (distance == 0) {
-        // Target is out of range, keep moving forward
-        Serial.print(F("Out of Range: "));
-        Serial.println(distance);
-        stateMachine(FORWARD, distance, OUT_OF_RANGE);
-    } 
-    else if ((distance < OBSTACLE_STOP_THRESHOLD) && (distance > OBSTACLE_SLOW_THRESHOLD)) {
-        // Randomly turn left or right if distance is between 20 and 30
-        int randomTurn = random(0, 2);  // Generates either 0 or 1
-        if (randomTurn == 0) {
-            stateMachine(LEFT, distance, UNCERTAIN);
-        } else {
-            stateMachine(RIGHT, distance, UNCERTAIN);
+        // Add a simple debounce mechanism for all new IR presses
+        // This ensures a command isn't re-processed too quickly
+        // after being received once.
+        static unsigned long lastIRCommandTime = 0;
+        const unsigned long IR_DEBOUNCE_DELAY = 300; // milliseconds
+
+        if (millis() - lastIRCommandTime < IR_DEBOUNCE_DELAY && !irDecoder.isRepeatSignal()) {
+            // This is a new press, but too soon after the last one, ignore.
+            // Allow repeat signals to pass if desired for continuous movement holding down key.
+            return;
         }
-        stopCount = 0; // Reset stop counter when moving
-    }
-    else if (distance < OBSTACLE_STOP_THRESHOLD) {
-        // If the car stops, track how long it's been stuck
-        if (stopStartTime == 0) {
-            stopStartTime = millis();  // Start tracking time when first stopping
+        lastIRCommandTime = millis(); // Update the time of the last processed command
+
+        // If '#' is pressed, toggle the navigation mode
+        if (decodedData == HASH) {
+            enableNavigation = !enableNavigation; // Toggle 0 to 1, or 1 to 0
+            if (enableNavigation) {
+                Serial.println(F("Navigation ENABLED."));
+                strcpy(gContent2, "Auto Nav");
+                running_state = NORMAL;
+            } else {
+                Serial.println(F("Navigation DISABLED (Manual Control)."));
+                strcpy(gContent2, "Manual");
+                running_state = MANUAL;
+                stateMachine(STOP, distance, IR_CONTROL); // Stop motors immediately
+            }
+            updateProgram();
+            // Crucial: A short delay after a mode change command to prevent
+            // immediate re-interpretation if the button is held slightly too long.
+            delay(2000); // Small delay to "settle" after a mode toggle
+            return; // Exit after processing HASH
         }
 
-        stateMachine(STOP, distance, BLOCKED);
-        stopCount++;
-
-        // If stuck for too long or stopped too many times, try recovery
-        if ((millis() - stopStartTime > stuckThreshold) || stopCount >= maxStopAttempts) {
+        // Process other IR commands only if in Manual mode (navigation disabled)
+        if (!enableNavigation) {
+            stateMachine(decodedData, distance, IR_CONTROL);
             stopCount = 0;
             stopStartTime = 0;
-
-            int turnTime = 500 + (recoveryAttempts * 200);  // Increase turn duration gradually
-            int reverseTime = 1000 + (recoveryAttempts * 300); // Increase reverse time
-
-            // Alternate left/right to avoid looping
-            if (recoveryAttempts % 2 == 0) {
-                stateMachine(REVERSE, distance, RECOVERING);
-                delay(reverseTime);
-                stateMachine(LEFT, distance, RECOVERING);
-                delay(turnTime);
-            } else {
-                stateMachine(REVERSE, distance, RECOVERING);
-                delay(reverseTime);
-                stateMachine(RIGHT, distance, RECOVERING);
-                delay(turnTime);
+            recoveryAttempts = 0;
+        } else {
+            if (decodedData == STOP) { // Allow STOP command even in autonomous mode
+                stateMachine(STOP, distance, IR_CONTROL);
             }
-
-            recoveryAttempts++;  // Increase attempts for next time
-            if (recoveryAttempts > 3) recoveryAttempts = 0;  // Reset if too many tries
         }
     }
-    else {
-        // Continue moving forward if distance is greater than or equal to 30
-        stateMachine(FORWARD, distance, CLEAR_PATH);
-        stopCount = 0; // Reset stop counter when moving
-        stopStartTime = 0; // Reset stuck timer
+
+    // Process autonomous navigation logic ONLY if navigation is enabled
+    if (enableNavigation)
+    {
+        if (distance == 0) {
+            Serial.print(F("Out of Range: "));
+            Serial.println(distance);
+            stateMachine(FORWARD, distance, OUT_OF_RANGE);
+        }
+        else if ((distance < OBSTACLE_STOP_THRESHOLD) && (distance > OBSTACLE_SLOW_THRESHOLD)) {
+            int randomTurn = random(0, 2);
+            if (randomTurn == 0) {
+                stateMachine(LEFT, distance, UNCERTAIN);
+            } else {
+                stateMachine(RIGHT, distance, UNCERTAIN);
+            }
+            stopCount = 0;
+        }
+        else if (distance < OBSTACLE_STOP_THRESHOLD) {
+            if (stopStartTime == 0) {
+                stopStartTime = millis();
+            }
+            stateMachine(STOP, distance, BLOCKED);
+            stopCount++;
+
+            if ((millis() - stopStartTime > stuckThreshold) || stopCount >= maxStopAttempts) {
+                performRecovery(distance);
+            }
+        }
+        else {
+            stateMachine(FORWARD, distance, CLEAR_PATH);
+            stopCount = 0;
+            stopStartTime = 0;
+        }
     }
 }
-
+#endif
 
 void processEncoder()
 {
@@ -828,13 +927,46 @@ void processEncoder()
     rpm = (60 * 100 / pulses_per_turn )/ (millis() - encoder_previous_time)* pulses;
     encoder_previous_time=millis();
     pulses=0;
-    Serial.print("RPM= ");
-    Serial.println(rpm);
+    DEBUG_PRINT(F("RPM= "));
+    DEBUG_PRINT(rpm);
     attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), count, FALLING ); // Triggering count function everytime the encoder pin1 turns from 1 to 0  
   }
 }
 
-void ProcessMCP()
+#ifdef MCP23017
+void process_inta_interrupt()
+{
+  if (interruptOccurred) {
+    interruptOccurred = false; // Reset the flag immediately
+    delayMicroseconds(10); // Short delay before reading registers
+    uint8_t lastInterruptPin = mcp.getLastInterruptPin(); // get the pin
+    if (lastInterruptPin != 255) { // ignore interrupts from pin 255
+      Serial.print("Interrupt detected on pin: ");
+      Serial.println(lastInterruptPin);
+      Serial.print("Pin states at time of interrupt: 0b");
+      processLogs(currentState, 2,CRASH_DETECT,1);
+      #ifdef ENABLE_MOTOR_CONTROL
+      process_navigation_information(2);
+      #endif
+      Serial.println(mcp.getCapturedInterrupt(), 2);
+
+      // Debugging: Print captured interrupt values.
+      Serial.print("Captured Interrupt: 0x");
+      Serial.println(mcp.getCapturedInterrupt(), HEX);
+      delay(250); // debounce.
+      //Debugging: print captured interrupt after clear.
+      Serial.print("Captured Interrupt after clear: 0x");
+      Serial.println(mcp.getCapturedInterrupt(), HEX);
+    } else {
+      Serial.println("Ignored interrupt from pin 255");
+      mcp.clearInterrupts(); // clear the interrupt even if ignored.
+    }
+    mcp.clearInterrupts(); // Clear the interrupt
+  }
+}
+
+
+void process_mpc_inta()
 {
   if (!digitalRead(INT_PIN))
   {
@@ -842,6 +974,12 @@ void ProcessMCP()
     Serial.println(mcp.getLastInterruptPin());
     Serial.print("Pin states at time of interrupt: 0b");
     Serial.println(mcp.getCapturedInterrupt(), 2);
+    processLogs(currentState, 2,6,1);
+    #ifdef ENABLE_MOTOR_CONTROL
+    stateMachine(STOP, 2, BLOCKED);
+    stopCount++;
+    performRecovery(2);
+    #endif
     // delay(250);  // debounce
     // // NOTE: If using DEFVAL, INT clears only if interrupt
     // // condition does not exist.
@@ -849,40 +987,67 @@ void ProcessMCP()
     mcp.clearInterrupts();  // clear
   }
 }
+#endif
 
 void loop() {
-  unsigned int sw1 = digitalRead(SW1);  // Read the input state
+  printContent(displayItems, sizeof(displayItems) / sizeof(displayItems[0]));
+
   unsigned int distance;
-  int pinState = digitalRead(ENCODER_PIN); // Get current logic level
-  // DEBUG_PRINTLN(sw1);               // Print the value to Serial Monitor
-  unsigned int sw2 = digitalRead(SW2);  // Read the input state
-  // DEBUG_PRINTLN(sw2);               // Print the value to Serial Monitor
-  //testMotor();
-  #ifdef ENABLE_MOTOR_CONTROL
-  if(sw1 == 0)
-  {
-    // moveBackward(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED, HIGHER_SPEED);
-    // moveBackward(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED, HIGHER_SPEED);
-    Serial.println(F("SW1 Switch ...."));
-    distance = processHCSR04();
 
+  // --- Re-adding SW1 and SW2 handling ---
+  unsigned int sw1_state = digitalRead(SW1);
+  unsigned int sw2_state = digitalRead(SW2);
+
+  // Example: SW1 as a 'Stop All' button (highest priority)
+  if (sw1_state == LOW) { // Assuming active LOW
+      Serial.println(F("SW1 Pressed: Emergency Stop!"));
+      stateMachine(STOP, distance, CRASH_DETECT); // Use CRASH_DETECT or a new REASON_MANUAL_STOP
+      enableNavigation = 0; // Force into manual mode and stop
+      strcpy(gContent2, "Emergency Stop"); // Update display
+      updateProgram();
+      digitalWrite(ERROR_LED_PIN, HIGH); // Indicate error/stop state
+      delay(500); // Debounce
   }
-  if(sw2 == 0)
-  {
-    // stopMotor(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED);
-    // stopMotor(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED);
-    digitalWrite(ERROR_LED_PIN, LOW);
+  // Example: SW2 to temporarily activate/deactivate navigation (alternative to IR # key)
+  // Be careful if both IR and SW2 toggle the same variable, ensure debouncing.
+  if (sw2_state == LOW) { // Assuming active LOW
+      if (!lastSw2State) { // Only trigger on a state change (press)
+          enableNavigation = !enableNavigation; // Toggle mode
+          if (enableNavigation) {
+              Serial.println(F("SW2 Pressed: Navigation ENABLED."));
+              strcpy(gContent2, "Auto Nav");
+              running_state = NORMAL;
+          } else {
+              Serial.println(F("SW2 Pressed: Navigation DISABLED (Manual)."));
+              strcpy(gContent2, "Manual");
+              running_state = MANUAL;
+              stateMachine(STOP, distance, IR_CONTROL); // Stop when entering manual
+          }
+          updateProgram();
+          digitalWrite(MODE_LED, enableNavigation ? HIGH : LOW); // Indicate mode
+          delay(500); // Debounce
+      }
+      lastSw2State = true; // Store current state for next loop
+  } else {
+      lastSw2State = false; // Reset state when button is released
+      digitalWrite(ERROR_LED_PIN, LOW); // Turn off error LED if not pressed
   }
-  #endif
+  // --- End Re-added SW1 and SW2 handling ---
+
+
+  #ifdef ENABLE_HC_SR04
   distance = processHCSR04();
-  process_navigation_information(distance);
-  processEncoder();
-      
+  #endif
 
-  Serial.print("Encoder Pin State: ");
-  Serial.println(pinState); // Will be 0 (LOW) or 1 (HIGH)
-  ProcessMCP();
-    //checkIRDecoder();
-    //delay(1000);
-  // Serial.println("Main Loop .....");
+  #ifdef ENABLE_MOTOR_CONTROL
+  // process_navigation_information now handles IR and decides motor action based on 'enableNavigation'
+  process_navigation_information(distance);
+  #endif
+
+  processEncoder();
+
+  #ifdef MCP23017
+  process_mpc_inta();
+  #endif
 }
+
