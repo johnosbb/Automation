@@ -90,15 +90,15 @@ PHOTO_READY = 0x11
 
 # Application stubs (replace with real camera logic)
 def take_photo() -> int:
-    print("📸  Taking photo…")
+    print("Taking photo…")
     time.sleep(0.5)
     return int(time.time()) & 0xFFFFFFFF   # fake image-ID
 
 def start_record(ms: int):
-    print(f"🎥  Start recording for {ms} ms")
+    print(f"Start recording for {ms} ms")
 
 def stop_record():
-    print("⏹️   Stop recording")
+    print("Stop recording")
 
 # Frame TX helper
 def send_frame(*tlvs: bytes) -> None:
@@ -122,9 +122,9 @@ def read_frames():
                     try:
                         yield cobs_decode(enc)
                     except ValueError as e:
-                        print("⚠️  COBS error", e, "RAW", enc.hex())
+                        print("COBS error", e, "RAW", enc.hex())
                 else:
-                    print(f"⚠️  CRC mismatch calc={calc_crc:02X} rx={rx_crc:02X}",
+                    print(f"CRC mismatch calc={calc_crc:02X} rx={rx_crc:02X}",
                           "RAW", enc.hex())
             buf.clear()
         else:
@@ -150,4 +150,4 @@ for frame in read_frames():
             send_frame(build_tlv(ACK_TLV, b'\x01'))
 
         else:
-            print("❓  Unknown TLV", t, v.hex())
+            print("Unknown TLV", t, v.hex())
