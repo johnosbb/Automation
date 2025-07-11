@@ -8,12 +8,18 @@
 #include "HX1838Decoder.h"
 #include <NewPing.h>
 #include <ArduinoJson.h>
-
+#include <HardwareSerial.h>
 #include <Adafruit_MCP23X17.h>
+#include "cobs.h"          // tinycobs or your own
+#include "crc8.h" 
+
+uint8_t frame[64];
+
+
 
 #define BUTTON_PIN 1   // MCP23XXX pin used for interrupt
 
-#define INT_PIN 32      // microcontroller pin attached to INTA/B
+
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -25,15 +31,23 @@
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
+#define HARDWARE_SERIAL
+#ifdef HARDWARE_SERIAL
+// Uart
+HardwareSerial SerialExt(2);             // use hardware UART #2
+constexpr uint8_t UART_RX_PIN = 34;      // RX pin with external pull up
+constexpr uint8_t UART_TX_PIN = 13;      // TX
+#endif
 
 // LEDs
-
+// These are references to MCP23017
 #define STATUS_LED 4 // GPB pin 4 is connected to a blue status Led
 #define MODE_LED 3   // GPB pin 3 is connected to a yellow mode Led
+#define SW1 2  // GPA2
+#define SW2 3  // GPA3
 
 
-
-
+#define INT_PIN 32      // microcontroller pin attached to INTA/B
 // Motor Control
 
 // Left Motor Rear
@@ -44,8 +58,7 @@
 #define MOTOR_RIGHT_DIRECTION_1  19
 #define MOTOR_RIGHT_DIRECTION_2  18
 #define MOTOR_RIGHT_SPEED  23
-#define SW1 34  // GPIO34
-#define SW2 35  // GPIO35
+
 
 // Infrared Receiver
 #define IR_RECEIVE_PIN 4 // GPIO4
@@ -210,10 +223,57 @@ void count() // Counting the number of pulses for calculation of rpm
   pulses++;  
 }
 
+
+
+
+/* ─── forward declaration ─── */
+void serialDebug(const uint8_t *enc, size_t len, uint8_t crc);
+
+/* ─── send one TLV as a framed packet ─── */
+void sendCmd(uint8_t type, const uint8_t *val, uint8_t len)
+{
+    uint8_t p[32];
+    p[0] = type;
+    p[1] = len;
+    memcpy(&p[2], val, len);
+
+    uint8_t enc[40];
+    size_t  encLen = cobs_encode(p, 2 + len, enc);
+
+    uint8_t crc8   = crc8_buf(enc, encLen);
+
+    serialDebug(enc, encLen, crc8);        // <-- print the frame in hex
+
+    SerialExt.write(0x7E);
+    SerialExt.write(enc, encLen);
+    SerialExt.write(crc8);
+    SerialExt.write(0x7E);
+}
+
+/* ─── helper to print the frame in USB console ─── */
+void serialDebug(const uint8_t *enc, size_t len, uint8_t crc)
+{
+  Serial.print(F("TX : 7E"));
+  for (size_t i = 0; i < len; ++i) {
+    Serial.printf(" %02X", enc[i]);
+  }
+  Serial.printf(" %02X 7E\n", crc);
+}
+
+/* 1.  Ask the Ultra to TAKE A SINGLE PHOTO
+ *    TLV = [0x01, 0x00]  (type=0x01, length=0)  */
+void triggerStill()
+{
+    Serial.println("Requesting Still image");
+    sendCmd(0x01,            // type  (CMD_TAKE_PHOTO)
+            nullptr,         // no value bytes
+            0);              // length = 0
+}
+
 /**
  * @brief Turns on a selected LED connected to the MCP23017.
  *
- * @param ledPin The GPB pin number (0-15) corresponding to the LED.
+ * @param ledPin The GPB pin number (0-15) corresponding to the LED. GPB0 is pin 0
  * Use defined constants like STATUS_LED (blue) or MODE_LED (yellow).
  */
 void turnOnLed(uint8_t ledPin) {
@@ -356,6 +416,25 @@ void updateMotorStatus()
 
 
 #ifdef MCP23017
+
+// | Library pin # | Port bit | Package pin (DIP/SSOP/QFN) | Silkscreen label |
+// |--------------:|----------|----------------------------|------------------|
+// | 0  | GPA0 | 21 | A0 |
+// | 1  | GPA1 | 22 | A1 |
+// | 2  | GPA2 | 23 | A2 |
+// | 3  | GPA3 | 24 | A3 |
+// | 4  | GPA4 | 25 | A4 |
+// | 5  | GPA5 | 26 | A5 |
+// | 6  | GPA6 | 27 | A6 |
+// | 7  | GPA7 | 28 | A7 |
+// | 8  | GPB0 | 1  | B0 |
+// | 9  | GPB1 | 2  | B1 |
+// | 10 | GPB2 | 3  | B2 |
+// | 11 | GPB3 | 4  | B3 |
+// | 12 | GPB4 | 5  | B4 |
+// | 13 | GPB5 | 6  | B5 |
+// | 14 | GPB6 | 7  | B6 |
+// | 15 | GPB7 | 8  | B7 |
 void setupMCP() {
   Serial.println("MCP23xxx Configuration!");
   if (!mcp.begin_I2C()) {
@@ -366,17 +445,15 @@ void setupMCP() {
   // Mirror INTA and INTB, use active-low, open-drain
   mcp.setupInterrupts(true, false, LOW);
   // Configure pins 0 to 1 as inputs with pull-ups and enable interrupt. Only using two pins now.
-  for (uint8_t i = 0; i <= 1; i++) {
+  for (uint8_t i = 0; i <= 7; i++) {
     mcp.pinMode(i, INPUT_PULLUP);
     mcp.setupInterruptPin(i, CHANGE); // interrupt when pulled LOW
   }
-
-    // Configure GPB pins (8-15) as outputs
+  // Configure GPB pins (8-15) as outputs
   for (uint8_t i = 8; i <= 15; i++) {
     mcp.pinMode(i, OUTPUT);
     mcp.digitalWrite(i, LOW); // Initialize outputs to LOW
   }
-
   // Attach interrupt to the ESP32 pin
   attachInterrupt(digitalPinToInterrupt(INT_PIN), handleInterrupt, FALLING); // Assuming the MCP23X17 pulls INT_PIN LOW
 }
@@ -688,8 +765,10 @@ void checkIRDecoder() {
 }
 
 void setup() {
-  pinMode(SW1, INPUT);  // Configure GPIO34 as an input
-  pinMode(SW2, INPUT);  // Configure GPIO34 as an input
+  // pinMode(SW1, INPUT);  // Configure GPIO34 as an input
+  // pinMode(SW2, INPUT);  // Configure GPIO34 as an input
+
+
   pinMode(HC_SR04_ECHO_PIN, INPUT);
   pinMode(HC_SR04_TRIGGER_PIN, OUTPUT);
   pinMode(ERROR_LED_PIN, OUTPUT);
@@ -697,6 +776,16 @@ void setup() {
   
   digitalWrite(ERROR_LED_PIN, HIGH); // Turn on initially
   Serial.begin(115200);
+
+#ifdef HARDWARE_SERIAL
+    // Secondary port
+  SerialExt.begin(
+      115200,            // baud rate
+      SERIAL_8N1,        // data/parity/stop
+      UART_RX_PIN,       // receive pin
+      UART_TX_PIN        // transmit pin
+  );
+#endif
   // Set WiFi to station mode and disconnect from an AP if it was previously connected
   WiFi.disconnect();
   delay(100);
@@ -773,8 +862,8 @@ void processLogs(unsigned int state, unsigned int distance, unsigned int reason,
         // Convert JSON to string
         String logMessage;
         serializeJson(jsonDoc, logMessage);
-        Serial.print(F("Sending: "));
-        Serial.println(logMessage);
+        // Serial.print(F("Sending: "));
+        // Serial.println(logMessage);
         const int maxRetries = 3;  // Retry sending up to 3 times
         int retries = 0;
         bool success = false;
@@ -867,6 +956,10 @@ void process_navigation_information(unsigned int distance)
             // immediate re-interpretation if the button is held slightly too long.
             delay(2000); // Small delay to "settle" after a mode toggle
             return; // Exit after processing HASH
+        }
+        if(decodedData == KEY_4)
+        {
+            triggerStill();
         }
 
         // Process other IR commands only if in Manual mode (navigation disabled)
@@ -994,10 +1087,8 @@ void loop() {
 
   unsigned int distance;
 
-  // --- Re-adding SW1 and SW2 handling ---
-  unsigned int sw1_state = digitalRead(SW1);
-  unsigned int sw2_state = digitalRead(SW2);
-
+  bool sw1_state = mcp.digitalRead(SW1);   // HIGH = released, LOW = pressed
+  bool sw2_state = mcp.digitalRead(SW2);
   // Example: SW1 as a 'Stop All' button (highest priority)
   if (sw1_state == LOW) { // Assuming active LOW
       Serial.println(F("SW1 Pressed: Emergency Stop!"));
@@ -1049,5 +1140,21 @@ void loop() {
   #ifdef MCP23017
   process_mpc_inta();
   #endif
+#ifdef HARDWARE_SERIAL
+  //   /* Echo data from external device to USB console */
+  // while (SerialExt.available())
+  // {
+  //   int c = SerialExt.read();
+  //   Serial.write(c);
+  // }
+
+  // /* And from USB console back to the external device */
+  // while (Serial.available())
+  // {
+  //   int c = Serial.read();
+  //   SerialExt.write(c);
+  // }
+  #endif
+
 }
 
