@@ -88,6 +88,17 @@ NAV_REVERSE = 0x07
 ACK_TLV     = 0x10
 PHOTO_READY = 0x11
 
+
+#  Navigation helpers 
+NAV_NAMES = {
+    "STOP":    NAV_STOP,
+    "LEFT":    NAV_LEFT,
+    "RIGHT":   NAV_RIGHT,
+    "REVERSE": NAV_REVERSE,
+}
+
+
+
 # Application stubs (replace with real camera logic)
 def take_photo() -> int:
     print("Taking photo…")
@@ -106,6 +117,27 @@ def send_frame(*tlvs: bytes) -> None:
     enc     = cobs_encode(payload)
     crc     = crc8(enc)
     ser.write(bytes((START,)) + enc + bytes((crc,)) + bytes((START,)))
+
+
+
+
+def send_nav(cmd: str) -> None:
+    """
+    Send one of the four navigation commands to the ESP32.
+
+    Parameters
+    ----------
+    cmd : str
+        One of "STOP", "LEFT", "RIGHT", "REVERSE"
+    """
+    cmd = cmd.upper()
+    if cmd not in NAV_NAMES:
+        raise ValueError(f"Unknown navigation command: {cmd}")
+
+    nav_tlv = build_tlv(NAV_NAMES[cmd])     # 1-byte TLV, no value
+    send_frame(nav_tlv)
+    print(f"→ NAV_{cmd} sent")
+
 
 #  Frame RX generator (yields raw payload)
 def read_frames():
@@ -130,24 +162,37 @@ def read_frames():
         else:
             buf.append(b[0])
 
+def process_frames():
+    for frame in read_frames():
+        for t, v in parse_tlvs(frame):
+            if t == CMD_TAKE_PHOTO and len(v) == 0:
+                img_id = take_photo()
+                send_frame(
+                    build_tlv(ACK_TLV, b'\x01'),
+                    build_tlv(PHOTO_READY, struct.pack('<I', img_id))
+                )
+
+            elif t == CMD_START_REC and len(v) == 4:
+                ms = struct.unpack('<I', v)[0]
+                start_record(ms)
+                send_frame(build_tlv(ACK_TLV, b'\x01'))
+
+            elif t == CMD_STOP_REC:
+                stop_record()
+                send_frame(build_tlv(ACK_TLV, b'\x01'))
+
+            elif t == ACK_TLV and len(v) == 1:
+                ok = v[0] == 0x01
+                print(f"ACK from ESP32: {'OK' if ok else 'FAIL'}")
+ 
+
+            else:
+                print("Unknown TLV", t, v.hex())
+
+
 # Main loop
-for frame in read_frames():
-    for t, v in parse_tlvs(frame):
-        if t == CMD_TAKE_PHOTO and len(v) == 0:
-            img_id = take_photo()
-            send_frame(
-                build_tlv(ACK_TLV, b'\x01'),
-                build_tlv(PHOTO_READY, struct.pack('<I', img_id))
-            )
 
-        elif t == CMD_START_REC and len(v) == 4:
-            ms = struct.unpack('<I', v)[0]
-            start_record(ms)
-            send_frame(build_tlv(ACK_TLV, b'\x01'))
-
-        elif t == CMD_STOP_REC:
-            stop_record()
-            send_frame(build_tlv(ACK_TLV, b'\x01'))
-
-        else:
-            print("Unknown TLV", t, v.hex())
+if __name__ == "__main__":
+    # Fire a quick LEFT command, then continue with normal RX handling
+    send_nav("LEFT")
+    process_frames()
