@@ -39,6 +39,28 @@ constexpr uint8_t UART_RX_PIN = 34;      // RX pin with external pull up
 constexpr uint8_t UART_TX_PIN = 13;      // TX
 #endif
 
+
+/*  ---- TLV parser & dispatcher ---- */
+enum : uint8_t {
+    NAV_STOP    = 0x04,
+    NAV_LEFT    = 0x05,
+    NAV_RIGHT   = 0x06,
+    NAV_REVERSE = 0x07,
+    ACK_TLV     = 0x10,
+};
+
+constexpr uint8_t START = 0x7E;              // frame delimiter
+
+/*  Ring-buffer for a single frame
+ *  Max frame size  =  1 (type) + 1 (len) + 0 (value)  ➜  2
+ *  After COBS      =  2 + ceil(2/254) = 3
+ *  Add CRC + 2x7E  =  5
+ *  Make it roomy   */
+static uint8_t  rxBuf[64];
+static size_t   rxLen = 0;                   // bytes currently in rxBuf
+static bool     inFrame = false;
+
+
 // LEDs
 // These are references to MCP23017
 #define STATUS_LED 4 // GPB pin 4 is connected to a blue status Led
@@ -224,10 +246,71 @@ void count() // Counting the number of pulses for calculation of rpm
 }
 
 
+void handleTlvs(const uint8_t *p, size_t len)
+{
+    for (size_t i = 0; i + 1 < len; )
+    {
+        uint8_t type = p[i++];
+        uint8_t l    = p[i++];
 
+        if (i + l > len) break;            // malformed → abort
+        const uint8_t *val = &p[i];
+        i += l;
+
+        switch (type)
+        {
+            case NAV_STOP:    /* len==0 */ motorStop();          break;
+            case NAV_LEFT:                   motorLeft();         break;
+            case NAV_RIGHT:                  motorRight();        break;
+            case NAV_REVERSE:                motorReverse();      break;
+            default:          /* ignore unknown TLVs */           continue;
+        }
+
+        /*  Reply with ACK = 0x01 (OK)  */
+        uint8_t ok = 0x01;
+        sendCmd(ACK_TLV, &ok, 1);
+    }
+}
 
 /* ─── forward declaration ─── */
 void serialDebug(const uint8_t *enc, size_t len, uint8_t crc);
+
+void pollUartRx()
+{
+    while (SerialExt.available())
+    {
+        uint8_t b = SerialExt.read();
+
+        if (b == START)
+        {
+            /* ── End-of-frame detected ── */
+            if (inFrame && rxLen >= 2)      // at least 1 byte data + CRC
+            {
+                size_t encLen = rxLen - 1;  // excl. CRC
+                uint8_t crcRx = rxBuf[encLen];
+                uint8_t crcCalc = crc8_buf(rxBuf, encLen);
+
+                if (crcRx == crcCalc)
+                {
+                    /* ---- COBS decode ---- */
+                    uint8_t decoded[32];
+                    size_t  decLen = cobs_decode(rxBuf, encLen, decoded);
+                    if (decLen)
+                        handleTlvs(decoded, decLen);
+                }
+                // else CRC mismatch → silently drop
+            }
+            /*  Fresh frame starts now      */
+            inFrame = true;
+            rxLen   = 0;
+        }
+        else if (inFrame && rxLen < sizeof(rxBuf))
+        {
+            rxBuf[rxLen++] = b;             // fill buffer
+        }
+    }
+}
+
 
 /* ─── send one TLV as a framed packet ─── */
 void sendCmd(uint8_t type, const uint8_t *val, uint8_t len)
@@ -1082,6 +1165,13 @@ void process_mpc_inta()
 }
 #endif
 
+/*  ---- Stubs for your motor driver ---- */
+void motorStop()    { Serial.println(F("MOTOR: STOP"));    /* … */ }
+void motorLeft()    { Serial.println(F("MOTOR: LEFT"));    /* … */ }
+void motorRight()   { Serial.println(F("MOTOR: RIGHT"));   /* … */ }
+void motorReverse() { Serial.println(F("MOTOR: REVERSE")); /* … */ }
+
+
 void loop() {
   printContent(displayItems, sizeof(displayItems) / sizeof(displayItems[0]));
 
@@ -1140,6 +1230,7 @@ void loop() {
   #ifdef MCP23017
   process_mpc_inta();
   #endif
+  pollUartRx();
 #ifdef HARDWARE_SERIAL
   //   /* Echo data from external device to USB console */
   // while (SerialExt.available())
