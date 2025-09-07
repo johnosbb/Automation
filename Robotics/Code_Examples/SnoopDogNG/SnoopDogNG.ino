@@ -362,7 +362,7 @@ void sendCmd(uint8_t type, const uint8_t *val, uint8_t len)
 /* ─── helper to print the frame in USB console ─── */
 void serialDebug(const uint8_t *enc, size_t len, uint8_t crc)
 {
-  Serial.print(F("TX : 7E"));
+  DEBUG_PRINT_INFO(F("TX : 7E"));
   for (size_t i = 0; i < len; ++i) {
     Serial.printf(" %02X", enc[i]);
   }
@@ -373,7 +373,7 @@ void serialDebug(const uint8_t *enc, size_t len, uint8_t crc)
  *    TLV = [0x01, 0x00]  (type=0x01, length=0)  */
 void triggerStill()
 {
-    Serial.println("Requesting Still image");
+  DEBUG_PRINT_INFO(F("Requesting Still image"));
     sendCmd(0x01,            // type  (CMD_TAKE_PHOTO)
             nullptr,         // no value bytes
             0);              // length = 0
@@ -545,9 +545,9 @@ void updateMotorStatus()
 // | 14 | GPB6 | 7  | B6 |
 // | 15 | GPB7 | 8  | B7 |
 void setupMCP() {
-  Serial.println("MCP23xxx Configuration!");
+  DEBUG_PRINT_INFO(F("MCP23xxx Configuration!"));
   if (!mcp.begin_I2C()) {
-    Serial.println("Error.");
+    DEBUG_PRINT_ERROR(F("MCP23xxx init Error."));
     while (1);
   }
   pinMode(INT_PIN, INPUT_PULLUP); // Important for interrupt triggering
@@ -588,18 +588,17 @@ void setupWifi()
   // Serial.println(WiFi.getMode());
   // Get MAC Address for Wi-Fi Station Interface
   String macAddress = WiFi.macAddress();
-  Serial.print("Wi-Fi MAC Address: ");
-  Serial.println(macAddress);
+  DEBUG_PRINTF_INFO("Wi-Fi MAC Address: %s\n", macAddress.c_str());
 }
 
 
 bool connectToBestKnownNetwork()
 {
-  Serial.println("Scanning for available networks...");
+  DEBUG_PRINT_INFO(F("Scanning for available networks..."));
   int networkCount = WiFi.scanNetworks();
 
   if (networkCount <= 0) {
-    Serial.println("No networks found.");
+    DEBUG_PRINT_INFO(F("No networks found."));
     return false;
   }
 
@@ -614,7 +613,7 @@ bool connectToBestKnownNetwork()
 
     for (int j = 0; j < numNetworks; ++j) {
       if (foundSSID == knownNetworks[j].ssid) {
-        Serial.printf("Known network found: %s (RSSI: %d)\n", foundSSID.c_str(), rssi);
+        DEBUG_PRINTF_INFO("Known network found: %s (RSSI: %d)\n", foundSSID.c_str(), rssi);
         if (rssi > bestRSSI) {
           bestRSSI = rssi;
           bestSSID = knownNetworks[j].ssid;
@@ -626,24 +625,24 @@ bool connectToBestKnownNetwork()
   }
 
   if (bestSSID) {
-    Serial.printf("Connecting to best known network: %s (RSSI: %d)\n", bestSSID, bestRSSI);
+    DEBUG_PRINTF_INFO("Connecting to best known network: %s (RSSI: %d)\n", bestSSID, bestRSSI);
     WiFi.config(device_ip, gateway_ip, subnet_mask, dns_ip_1, dns_ip_2);
     WiFi.begin(bestSSID, bestPassword);
 
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
       delay(500);
-      Serial.print(".");
+      DEBUG_PRINTF_DEBUG(".");
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWiFi connected.");
+      DEBUG_PRINT_INFO(F("WiFi connected."));
       return true;
     } else {
-      Serial.println("\nFailed to connect.");
+      DEBUG_PRINT_WARN(F("Failed to connect."));
     }
   } else {
-    Serial.println("No known networks found in scan.");
+    DEBUG_PRINT_INFO(F("No known networks found in scan."));
   }
 
   return false;
@@ -838,7 +837,7 @@ void stateMachine(unsigned int code,int distance, Reasoning reason)
         enableNavigation = 0;
         stopMotor(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED);
         stopMotor(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED);
-        Serial.println(F("Disabling Navigation... "));
+        DEBUG_PRINT_INFO(F("Disabling Navigation... "));
         // moveForward(MOTOR_LEFT_DIRECTION_1, MOTOR_LEFT_DIRECTION_2, MOTOR_LEFT_SPEED, driving_speed);  
         // moveBackward(MOTOR_RIGHT_DIRECTION_1, MOTOR_RIGHT_DIRECTION_2, MOTOR_RIGHT_SPEED, driving_speed);  
         break;          
@@ -879,22 +878,22 @@ void stateMachine(unsigned int code,int distance, Reasoning reason)
 }
 #endif
 void showKey(unsigned int decodedValue) {
-    Serial.print(F("Key Pressed: "));
+    DEBUG_PRINT_INFO(F("Key Pressed:"));
     switch (decodedValue) {
-        case 0xFF4AB5: Serial.println("Key 0"); break;
-        case 0xFF6897: Serial.println("Key 1"); break;
-        case 0xFF9867: Serial.println("Key 2"); break;
-        case 0xFFB04F: Serial.println("Key 3"); break;
-        case 0xFF30CF: Serial.println("Key 4"); break;
-        case 0xFF18E7: Serial.println("Key 5"); break;
-        case 0xFF629D: Serial.println("Forward"); break;
-        case 0xFF22DD: Serial.println("Left"); break;
-        case 0xFFC23D: Serial.println("Right"); break;
-        case 0xFFA857: Serial.println("Backward"); break;
-        case 0xFF02FD: Serial.println("Stop"); break;
-        case 0xFF42BD: Serial.println("*"); break;
-        case 0xFF52AD: Serial.println("#"); break;        
-        default: Serial.println("Unknown Key");
+        case 0xFF4AB5: DEBUG_PRINT_INFO(F("Key 0")); break;
+        case 0xFF6897: DEBUG_PRINT_INFO(F("Key 1")); break;
+        case 0xFF9867: DEBUG_PRINT_INFO(F("Key 2")); break;
+        case 0xFFB04F: DEBUG_PRINT_INFO(F("Key 3")); break;
+        case 0xFF30CF: DEBUG_PRINT_INFO(F("Key 4")); break;
+        case 0xFF18E7: DEBUG_PRINT_INFO(F("Key 5")); break;
+        case 0xFF629D: DEBUG_PRINT_INFO(F("Forward")); break;
+        case 0xFF22DD: DEBUG_PRINT_INFO(F("Left")); break;
+        case 0xFFC23D: DEBUG_PRINT_INFO(F("Right")); break;
+        case 0xFFA857: DEBUG_PRINT_INFO(F("Backward")); break;
+        case 0xFF02FD: DEBUG_PRINT_INFO(F("Stop")); break;
+        case 0xFF42BD: DEBUG_PRINT_INFO(F("*")); break;
+        case 0xFF52AD: DEBUG_PRINT_INFO(F("#")); break;        
+        default: DEBUG_PRINT_INFO(F("Unknown Key"));
     }
 }
 
@@ -903,8 +902,7 @@ void showKey(unsigned int decodedValue) {
 void checkIRDecoder() {
     if (irDecoder.available()) {
         turnOnLed(STATUS_LED);  
-        Serial.print(F("Decoded NEC Data: 0x"));
-        Serial.print(irDecoder.getDecodedData(), HEX);
+        DEBUG_PRINTF_INFO("Decoded NEC Data: 0x%08lX\n", (unsigned long)irDecoder.getDecodedData());
         // 0xFF6897 Key 1
         // 0xFF9867 Key 2
         // 0xFFB04F Key 3
@@ -916,9 +914,9 @@ void checkIRDecoder() {
         // 0xFFA857 Backward
         // 0xFF02FD Stop
         if (irDecoder.isRepeatSignal()) {
-            Serial.println(F(" (REPEATED)"));
+            DEBUG_PRINT_INFO(F("(REPEATED)"));
         } else {
-            Serial.println(F(" (NEW PRESS)"));
+            DEBUG_PRINT_INFO(F("(NEW PRESS)"));
         }
         delay(100);
         turnOffLed(STATUS_LED);
@@ -950,7 +948,7 @@ void setup() {
   // Set WiFi to station mode and disconnect from an AP if it was previously connected
   WiFi.disconnect();
   delay(100);
-  Serial.println("Serial initialised!");
+  DEBUG_PRINT_INFO(F("Serial initialised!"));
   #if 1
   #ifdef ENABLE_MOTOR_CONTROL
   setupMotorControl();
@@ -1016,10 +1014,7 @@ void reconnectToServer() {
   // Telemetry connection is optional; do not affect main state
   if (boot_disable_wifi || boot_disable_telemetry) return; // skip when disabled at boot
   if (WiFi.status() != WL_CONNECTED) return;
-  Serial.print(F("Connecting to server at "));
-  Serial.print(serverIP);
-  Serial.print(":");
-  Serial.println(serverPort);
+  DEBUG_PRINTF_INFO("Connecting to server at %s:%u\n", serverIP, (unsigned)serverPort);
   (void)client.connect(serverIP, serverPort);
 }
 
@@ -1055,13 +1050,13 @@ void processLogs(unsigned int state, unsigned int distance, unsigned int reason,
                 success = true;
                 break;  // Exit loop if successful
             } else {
-                Serial.println(F("Failed to send log message, retrying..."));
+                DEBUG_PRINT_WARN(F("Failed to send log message, retrying..."));
                 retries++;
                 delay(100);  // Small delay before retrying
             }
         }
         if (!success) {
-            Serial.println(F("Error: Failed to send log message after multiple attempts."));
+            DEBUG_PRINT_WARN(F("Error: Failed to send log message after multiple attempts."));
             // Non-fatal: do not alter running_state; try resetting client and continue
             if (client.connected()) client.stop();
         }
@@ -1099,9 +1094,8 @@ void process_navigation_information(unsigned int distance)
 {
     if (irDecoder.available()) {
         unsigned int decodedData = irDecoder.getDecodedData();
-        Serial.print(F("Decoded NEC Data: 0x"));
+        DEBUG_PRINTF_INFO("Decoded NEC Data: 0x%08X\n", decodedData);
         showKey(decodedData);
-        Serial.print(decodedData, HEX);
 
         // Add a simple debounce mechanism for all new IR presses
         // This ensures a command isn't re-processed too quickly
@@ -1120,11 +1114,11 @@ void process_navigation_information(unsigned int distance)
         if (decodedData == HASH) {
             enableNavigation = !enableNavigation; // Toggle 0 to 1, or 1 to 0
             if (enableNavigation) {
-                Serial.println(F("Navigation ENABLED."));
+                DEBUG_PRINT_INFO(F("Navigation ENABLED."));
                 strcpy(gContent2, "Auto Nav");
                 running_state = NORMAL;
             } else {
-                Serial.println(F("Navigation DISABLED (Manual Control)."));
+                DEBUG_PRINT_INFO(F("Navigation DISABLED (Manual Control)."));
                 strcpy(gContent2, "Manual");
                 running_state = MANUAL;
                 stateMachine(STOP, distance, IR_CONTROL); // Stop motors immediately
@@ -1157,8 +1151,7 @@ void process_navigation_information(unsigned int distance)
     if (enableNavigation)
     {
         if (distance == 0) {
-            Serial.print(F("Out of Range: "));
-            Serial.println(distance);
+            DEBUG_PRINTF_INFO("Out of Range: %u\n", distance);
             stateMachine(FORWARD, distance, OUT_OF_RANGE);
         }
         else if ((distance < OBSTACLE_STOP_THRESHOLD) && (distance > OBSTACLE_SLOW_THRESHOLD)) {
@@ -1212,24 +1205,21 @@ void process_inta_interrupt()
     delayMicroseconds(10); // Short delay before reading registers
     uint8_t lastInterruptPin = mcp.getLastInterruptPin(); // get the pin
     if (lastInterruptPin != 255) { // ignore interrupts from pin 255
-      Serial.print("Interrupt detected on pin: ");
-      Serial.println(lastInterruptPin);
-      Serial.print("Pin states at time of interrupt: 0b");
+      DEBUG_PRINTF_INFO("Interrupt detected on pin: %u\n", (unsigned)lastInterruptPin);
+      DEBUG_PRINT_INFO(F("Pin states at time of interrupt: 0b"));
       processLogs(currentState, 2,CRASH_DETECT,1);
       #ifdef ENABLE_MOTOR_CONTROL
       process_navigation_information(2);
       #endif
-      Serial.println(mcp.getCapturedInterrupt(), 2);
+      DEBUG_PRINTF_INFO("%u\n", (unsigned)mcp.getCapturedInterrupt());
 
       // Debugging: Print captured interrupt values.
-      Serial.print("Captured Interrupt: 0x");
-      Serial.println(mcp.getCapturedInterrupt(), HEX);
+      DEBUG_PRINTF_INFO("Captured Interrupt: 0x%X\n", (unsigned)mcp.getCapturedInterrupt());
       delay(250); // debounce.
       //Debugging: print captured interrupt after clear.
-      Serial.print("Captured Interrupt after clear: 0x");
-      Serial.println(mcp.getCapturedInterrupt(), HEX);
+      DEBUG_PRINTF_INFO("Captured Interrupt after clear: 0x%X\n", (unsigned)mcp.getCapturedInterrupt());
     } else {
-      Serial.println("Ignored interrupt from pin 255");
+      DEBUG_PRINT_INFO(F("Ignored interrupt from pin 255"));
       mcp.clearInterrupts(); // clear the interrupt even if ignored.
     }
     mcp.clearInterrupts(); // Clear the interrupt
@@ -1241,10 +1231,8 @@ void process_mpc_inta()
 {
   if (!digitalRead(INT_PIN))
   {
-    Serial.print("Interrupt detected on pin: ");
-    Serial.println(mcp.getLastInterruptPin());
-    Serial.print("Pin states at time of interrupt: 0b");
-    Serial.println(mcp.getCapturedInterrupt(), 2);
+    DEBUG_PRINTF_INFO("Interrupt detected on pin: %u\n", (unsigned)mcp.getLastInterruptPin());
+    DEBUG_PRINTF_INFO("Pin states at time of interrupt: 0b%u\n", (unsigned)mcp.getCapturedInterrupt());
     processLogs(currentState, 2,6,1);
     #ifdef ENABLE_MOTOR_CONTROL
     stateMachine(STOP, 2, BLOCKED);
@@ -1354,4 +1342,6 @@ void loop() {
   #endif
 
 }
+
+
 
