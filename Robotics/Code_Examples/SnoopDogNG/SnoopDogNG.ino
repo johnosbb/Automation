@@ -2,12 +2,21 @@
 
 #include <U8g2lib.h>
 #include <debug.h>
+
+// Feature flags (enabled by default)
+#define ENABLE_WIFI
+#define ENABLE_TELEMETRY
+
+#ifdef ENABLE_WIFI
 #include "WiFi.h"
 #include <config.h>
+#endif
 #include <esp_system.h> // For esp_read_mac
 #include "HX1838Decoder.h"
 #include <NewPing.h>
+#ifdef ENABLE_TELEMETRY
 #include <ArduinoJson.h>
+#endif
 #include <HardwareSerial.h>
 #include <Adafruit_MCP23X17.h>
 #include "cobs.h"          // tinycobs or your own
@@ -15,9 +24,10 @@
 
 
 
-
+#ifdef ENABLE_WIFI
 extern WifiCredentials knownNetworks[];
 extern const int numNetworks;
+#endif
 
 uint8_t frame[64];
 
@@ -71,7 +81,7 @@ static bool     inFrame = false;
 // These are references to MCP23017
 #define STATUS_LED 4 // GPB pin 4 is connected to a blue status Led
 #define MODE_LED 3   // GPB pin 3 is connected to a yellow mode Led
-#define SW1 2  // GPA2
+#define SW1 4  // GPA4
 #define SW2 3  // GPA3
 
 
@@ -167,6 +177,16 @@ const char* serverIP = "192.168.1.191"; // Replace with your server's IP address
 const uint16_t serverPort = 5000;       // Port for communication
 unsigned long lastLogTime = 0;
 const unsigned long logInterval = 1000; // Log every second
+
+// Boot override: disable WiFi/telemetry when SW1 held LOW at power-up
+static bool boot_disable_wifi = false;
+static bool boot_disable_telemetry = false;
+
+#ifdef ENABLE_WIFI
+// Offline-friendly reconnect helpers
+static unsigned long lastWifiRetry = 0;
+static const unsigned long wifiRetryIntervalMs = 60000; // 60s between retries when offline
+#endif
 
 
 // Variables to track stuck state
@@ -945,6 +965,25 @@ void setup() {
   #ifdef MCP23017
   setupMCP();
   #endif
+  // Read boot switches (no OLED or motor actions here)
+  #ifdef MCP23017
+  delay(20); // allow inputs to settle after MCP init
+  // Double-read the specific pins
+  bool sw1a = (mcp.digitalRead(SW1) == LOW);
+  bool sw2a = (mcp.digitalRead(SW2) == LOW);
+  delay(5);
+  bool sw1b = (mcp.digitalRead(SW1) == LOW);
+  bool sw2b = (mcp.digitalRead(SW2) == LOW);
+  bool sw1_pressed = sw1a && sw1b;
+  bool sw2_pressed = sw2a && sw2b;
+  boot_disable_wifi = sw1_pressed;
+  if (sw2_pressed) {
+    enableNavigation = 0;
+    running_state = MANUAL;
+    boot_disable_telemetry = true;
+    DEBUG_PRINT_INFO(F("Disabling telemetry at boot."));
+  }
+  #endif
   irDecoder.begin();
   DEBUG_PRINT_INFO(F("Setting up OLED Display"));
   u8g2_prepare();
@@ -952,46 +991,48 @@ void setup() {
   DEBUG_PRINT_INFO(F("Updating Display"));
   updateProgram();
   turnOnLed(STATUS_LED);
-  setupWifi();
-  WiFi.config(device_ip,  gateway_ip, subnet_mask,dns_ip_1,dns_ip_2);
-  WiFi.begin(ssid, pass);
-  DEBUG_PRINT_INFO(F("WiFi connecting."));
-  while (!connectToBestKnownNetwork()) {
-    Serial.println("Retrying in 10 seconds...");
-    delay(10000);
+  if (!boot_disable_wifi) {
+    setupWifi();
+    WiFi.config(device_ip,  gateway_ip, subnet_mask,dns_ip_1,dns_ip_2);
+    WiFi.begin(ssid, pass);
+    DEBUG_PRINT_INFO(F("WiFi connecting."));
+    // Try to connect for a bounded time, then continue offline
+    unsigned long wifiStart = millis();
+    const unsigned long wifiBudgetMs = 15000; // 15s budget
+    bool connected = connectToBestKnownNetwork();
+    while (!connected && (millis() - wifiStart) < wifiBudgetMs) {
+      delay(1000);
+      connected = connectToBestKnownNetwork();
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      digitalWrite(ERROR_LED_PIN, LOW); // Turn off after connecting
+      DEBUG_PRINT_INFO(F("WiFi connected."));
+      turnOffLed(STATUS_LED);
+    } else {
+      DEBUG_PRINT_INFO(F("WiFi not available at boot; continuing offline."));
+    }
+  } else {
+    DEBUG_PRINT_INFO(F("Boot override: WiFi disabled (SW1 LOW)"));
   }
-  digitalWrite(ERROR_LED_PIN, LOW); // Turn off after connecting
-
-  DEBUG_PRINT_INFO(F("WiFi connected."));
-  turnOffLed(STATUS_LED);
   #endif
 }
 
 
 void reconnectToServer() {
+  // Telemetry connection is optional; do not affect main state
+  if (boot_disable_wifi || boot_disable_telemetry) return; // skip when disabled at boot
+  if (WiFi.status() != WL_CONNECTED) return;
   Serial.print(F("Connecting to server at "));
-  digitalWrite(ERROR_LED_PIN, HIGH); // Turn on when reconnecting
   Serial.print(serverIP);
   Serial.print(":");
   Serial.println(serverPort);
-  running_state = RECONNECTING;
-  updateProgram();
-  if (client.connect(serverIP, serverPort)) {
-      Serial.println(F("Connected to server!"));
-      running_state = CONNECTED;
-      digitalWrite(ERROR_LED_PIN, LOW); // Turn off when connected
-      updateProgram();
-  } else {
-      Serial.println(F("Connection failed."));
-      running_state = ERROR;
-      updateProgram();
-      digitalWrite(ERROR_LED_PIN, HIGH); // Turn on when error occurs
-      delay(1000);
-  }
+  (void)client.connect(serverIP, serverPort);
 }
 
 void processLogs(unsigned int state, unsigned int distance, unsigned int reason, unsigned int priority)
 {
+    if (boot_disable_wifi || boot_disable_telemetry) return; // skip when disabled at boot
+    if (WiFi.status() != WL_CONNECTED) return;
     if (!client.connected()) {
         reconnectToServer();
     }
@@ -1027,11 +1068,8 @@ void processLogs(unsigned int state, unsigned int distance, unsigned int reason,
         }
         if (!success) {
             Serial.println(F("Error: Failed to send log message after multiple attempts."));
-            running_state = ERROR;
-            digitalWrite(ERROR_LED_PIN, HIGH); // Turn on when error occurs
-            updateProgram();
-            client.stop();  // Reset connection to avoid being stuck
-            reconnectToServer();
+            // Non-fatal: do not alter running_state; try resetting client and continue
+            if (client.connected()) client.stop();
         }
     }
 }
@@ -1240,42 +1278,42 @@ void loop() {
 
   unsigned int distance;
 
-  bool sw1_state = mcp.digitalRead(SW1);   // HIGH = released, LOW = pressed
-  bool sw2_state = mcp.digitalRead(SW2);
-  // Example: SW1 as a 'Stop All' button (highest priority)
-  if (sw1_state == LOW) { // Assuming active LOW
-      Serial.println(F("SW1 Pressed: Emergency Stop!"));
-      stateMachine(STOP, distance, CRASH_DETECT); // Use CRASH_DETECT or a new REASON_MANUAL_STOP
-      enableNavigation = 0; // Force into manual mode and stop
-      strcpy(gContent2, "Emergency Stop"); // Update display
-      updateProgram();
-      digitalWrite(ERROR_LED_PIN, HIGH); // Indicate error/stop state
-      delay(500); // Debounce
-  }
+  // bool sw1_state = mcp.digitalRead(SW1);   // HIGH = released, LOW = pressed
+  // bool sw2_state = mcp.digitalRead(SW2);
+  // // Example: SW1 as a 'Stop All' button (highest priority)
+  // if (sw1_state == LOW) { // Assuming active LOW
+  //     Serial.println(F("SW1 Pressed: Emergency Stop!"));
+  //     stateMachine(STOP, distance, CRASH_DETECT); // Use CRASH_DETECT or a new REASON_MANUAL_STOP
+  //     enableNavigation = 0; // Force into manual mode and stop
+  //     strcpy(gContent2, "Emergency Stop"); // Update display
+  //     updateProgram();
+  //     digitalWrite(ERROR_LED_PIN, HIGH); // Indicate error/stop state
+  //     delay(500); // Debounce
+  // }
   // Example: SW2 to temporarily activate/deactivate navigation (alternative to IR # key)
   // Be careful if both IR and SW2 toggle the same variable, ensure debouncing.
-  if (sw2_state == LOW) { // Assuming active LOW
-      if (!lastSw2State) { // Only trigger on a state change (press)
-          enableNavigation = !enableNavigation; // Toggle mode
-          if (enableNavigation) {
-              Serial.println(F("SW2 Pressed: Navigation ENABLED."));
-              strcpy(gContent2, "Auto Nav");
-              running_state = NORMAL;
-          } else {
-              Serial.println(F("SW2 Pressed: Navigation DISABLED (Manual)."));
-              strcpy(gContent2, "Manual");
-              running_state = MANUAL;
-              stateMachine(STOP, distance, IR_CONTROL); // Stop when entering manual
-          }
-          updateProgram();
-          digitalWrite(MODE_LED, enableNavigation ? HIGH : LOW); // Indicate mode
-          delay(500); // Debounce
-      }
-      lastSw2State = true; // Store current state for next loop
-  } else {
-      lastSw2State = false; // Reset state when button is released
-      digitalWrite(ERROR_LED_PIN, LOW); // Turn off error LED if not pressed
-  }
+  // if (sw2_state == LOW) { // Assuming active LOW
+  //     if (!lastSw2State) { // Only trigger on a state change (press)
+  //         enableNavigation = !enableNavigation; // Toggle mode
+  //         if (enableNavigation) {
+  //             Serial.println(F("SW2 Pressed: Navigation ENABLED."));
+  //             strcpy(gContent2, "Auto Nav");
+  //             running_state = NORMAL;
+  //         } else {
+  //             Serial.println(F("SW2 Pressed: Navigation DISABLED (Manual)."));
+  //             strcpy(gContent2, "Manual");
+  //             running_state = MANUAL;
+  //             stateMachine(STOP, distance, IR_CONTROL); // Stop when entering manual
+  //         }
+  //         updateProgram();
+  //         digitalWrite(MODE_LED, enableNavigation ? HIGH : LOW); // Indicate mode
+  //         delay(500); // Debounce
+  //     }
+  //     lastSw2State = true; // Store current state for next loop
+  // } else {
+  //     lastSw2State = false; // Reset state when button is released
+  //     digitalWrite(ERROR_LED_PIN, LOW); // Turn off error LED if not pressed
+  // }
   // --- End Re-added SW1 and SW2 handling ---
 
 
@@ -1289,6 +1327,17 @@ void loop() {
   #endif
 
   processEncoder();
+  #ifdef ENABLE_WIFI
+  // Background WiFi reconnect when offline (non-blocking)
+  if (!boot_disable_wifi && WiFi.status() != WL_CONNECTED) {
+    unsigned long now = millis();
+    if (now - lastWifiRetry > wifiRetryIntervalMs) {
+      lastWifiRetry = now;
+      DEBUG_PRINT_INFO(F("Attempting background WiFi reconnect..."));
+      connectToBestKnownNetwork();
+    }
+  }
+  #endif
 
   #ifdef MCP23017
   process_mpc_inta();
