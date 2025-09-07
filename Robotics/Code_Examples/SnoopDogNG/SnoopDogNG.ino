@@ -13,6 +13,12 @@
 #include "cobs.h"          // tinycobs or your own
 #include "crc8.h" 
 
+
+
+
+extern WifiCredentials knownNetworks[];
+extern const int numNetworks;
+
 uint8_t frame[64];
 
 
@@ -566,6 +572,64 @@ void setupWifi()
   Serial.println(macAddress);
 }
 
+
+bool connectToBestKnownNetwork()
+{
+  Serial.println("Scanning for available networks...");
+  int networkCount = WiFi.scanNetworks();
+
+  if (networkCount <= 0) {
+    Serial.println("No networks found.");
+    return false;
+  }
+
+  int bestNetworkIndex = -1;
+  int bestRSSI = -1000;
+  const char* bestSSID = nullptr;
+  const char* bestPassword = nullptr;
+
+  for (int i = 0; i < networkCount; ++i) {
+    String foundSSID = WiFi.SSID(i);
+    int rssi = WiFi.RSSI(i);
+
+    for (int j = 0; j < numNetworks; ++j) {
+      if (foundSSID == knownNetworks[j].ssid) {
+        Serial.printf("Known network found: %s (RSSI: %d)\n", foundSSID.c_str(), rssi);
+        if (rssi > bestRSSI) {
+          bestRSSI = rssi;
+          bestSSID = knownNetworks[j].ssid;
+          bestPassword = knownNetworks[j].password;
+        }
+        break; // Stop checking other known networks
+      }
+    }
+  }
+
+  if (bestSSID) {
+    Serial.printf("Connecting to best known network: %s (RSSI: %d)\n", bestSSID, bestRSSI);
+    WiFi.config(device_ip, gateway_ip, subnet_mask, dns_ip_1, dns_ip_2);
+    WiFi.begin(bestSSID, bestPassword);
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+      delay(500);
+      Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi connected.");
+      return true;
+    } else {
+      Serial.println("\nFailed to connect.");
+    }
+  } else {
+    Serial.println("No known networks found in scan.");
+  }
+
+  return false;
+}
+
+
 #ifdef ENABLE_HC_SR04
 int processHCSR04()
 {
@@ -892,10 +956,9 @@ void setup() {
   WiFi.config(device_ip,  gateway_ip, subnet_mask,dns_ip_1,dns_ip_2);
   WiFi.begin(ssid, pass);
   DEBUG_PRINT_INFO(F("WiFi connecting."));
-  while (WiFi.status() != WL_CONNECTED) {
-      DEBUG_PRINT_INFO(F("-"));
-      delay(500);
-      DEBUG_PRINT_INFO(F("."));
+  while (!connectToBestKnownNetwork()) {
+    Serial.println("Retrying in 10 seconds...");
+    delay(10000);
   }
   digitalWrite(ERROR_LED_PIN, LOW); // Turn off after connecting
 
