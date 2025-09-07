@@ -671,21 +671,15 @@ void scanWifiNetworks()
     if (n == 0) {
         DEBUG_PRINT_INFO(F("no networks found"));
     } else {
-        DEBUG_PRINT_INFO(String(n).c_str() + String(F(" networks found")));
+        DEBUG_PRINTF_INFO("%d networks found\n", n);
         for (int i = 0; i < n; ++i) {
-            // Create the string with SSID and RSSI for each network found
-            String networkInfo = String(i + 1) + String(F(": ")) + WiFi.SSID(i) + String(F(" (")) + String(WiFi.RSSI(i)) + String(F(")"));
-
-            // Append encryption type information
-            if (WiFi.encryptionType(i) != WIFI_AUTH_OPEN) {
-                networkInfo += F(" *");
-            }
-
-            DEBUG_PRINT_INFO(networkInfo.c_str());
+            const char* ssid = WiFi.SSID(i).c_str();
+            int rssi = WiFi.RSSI(i);
+            bool secured = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+            DEBUG_PRINTF_INFO("%d: %s (%d)%s\n", i + 1, ssid, rssi, secured ? " *" : "");
             delay(10);
         }
     }
-    DEBUG_PRINT_INFO(F(""));
     // Wait a bit before scanning again
     delay(5000);
 }

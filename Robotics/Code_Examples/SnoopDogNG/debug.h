@@ -32,6 +32,13 @@
 
   // Very Verbose Debug
   #define DEBUG_PRINT_VERY_VERBOSE(x) if (DEBUG_LEVEL >= DEBUG_LEVEL_VERY_VERBOSE) { Serial.print("[VERY_VERBOSE] "); Serial.print(__FILE__); Serial.print(":"); Serial.print(__LINE__); Serial.print(" - "); Serial.println(x); }
+
+  // printf-style helpers (avoid Arduino String heap churn)
+  #define DEBUG_PRINTF_ERROR(fmt, ...)   do { if (DEBUG_LEVEL >= DEBUG_LEVEL_ERROR) { Serial.print("[ERROR] "); Serial.print(__FILE__); Serial.print(":"); Serial.print(__LINE__); Serial.print(" - "); Serial.printf((fmt), ##__VA_ARGS__); } } while(0)
+  #define DEBUG_PRINTF_WARN(fmt, ...)    do { if (DEBUG_LEVEL >= DEBUG_LEVEL_WARN)  { Serial.print("[WARNING] "); Serial.print(__FILE__); Serial.print(":"); Serial.print(__LINE__); Serial.print(" - "); Serial.printf((fmt), ##__VA_ARGS__); } } while(0)
+  #define DEBUG_PRINTF_INFO(fmt, ...)    do { if (DEBUG_LEVEL >= DEBUG_LEVEL_INFO)  { Serial.print("[INFO] "); Serial.print(__FILE__); Serial.print(":"); Serial.print(__LINE__); Serial.print(" - "); Serial.printf((fmt), ##__VA_ARGS__); } } while(0)
+  #define DEBUG_PRINTF_DEBUG(fmt, ...)   do { if (DEBUG_LEVEL >= DEBUG_LEVEL_DEBUG) { Serial.print("[DEBUG] "); Serial.printf((fmt), ##__VA_ARGS__); } } while(0)
+  #define DEBUG_PRINTF_VERBOSE(fmt, ...) do { if (DEBUG_LEVEL >= DEBUG_LEVEL_VERBOSE) { Serial.print("[VERBOSE] "); Serial.print(__FILE__); Serial.print(":"); Serial.print(__LINE__); Serial.print(" - "); Serial.printf((fmt), ##__VA_ARGS__); } } while(0)
 #else
   #define DEBUG_PRINT_ERROR(x)
   #define DEBUG_PRINT_WARN(x)
@@ -40,4 +47,9 @@
   #define DEBUG_PRINTLN(x)
   #define DEBUG_PRINT_VERBOSE(x)
   #define DEBUG_PRINT_VERY_VERBOSE(x)
+  #define DEBUG_PRINTF_ERROR(fmt, ...)
+  #define DEBUG_PRINTF_WARN(fmt, ...)
+  #define DEBUG_PRINTF_INFO(fmt, ...)
+  #define DEBUG_PRINTF_DEBUG(fmt, ...)
+  #define DEBUG_PRINTF_VERBOSE(fmt, ...)
 #endif
